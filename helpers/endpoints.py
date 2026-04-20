@@ -1,5 +1,3 @@
-"""URL builders for Google Maps internal API endpoints."""
-
 from urllib.parse import quote
 
 

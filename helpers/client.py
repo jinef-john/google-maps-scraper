@@ -1,5 +1,3 @@
-"""HTTP client wrapper using httpcloak for Google Maps scraping."""
-
 import time
 import random
 import httpcloak

@@ -1,5 +1,3 @@
-"""Response parsers for Google Maps internal API responses."""
-
 import json
 import re
 
