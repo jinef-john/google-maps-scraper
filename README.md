@@ -41,27 +41,27 @@ python main.py place "0x465f9b8fa03f30b3:0xb52faeba880b7674" --max-reviews=20 --
 
 ## Commands
 
-| Command  | What it does                                | Speed  | Returns                                      |
-| -------- | ------------------------------------------- | ------ | -------------------------------------------- |
-| `list`   | Search only — no details or reviews fetched | Fast   | name, address, rating, coords, categories    |
-| `place`  | Full scrape of a single known place         | Medium | all fields + reviews                         |
-| `search` | Search + full scrape of every result        | Slow   | all fields + reviews for every matched place |
+| Command  | What it does                                |     | Returns                                      |
+| -------- | ------------------------------------------- | --- | -------------------------------------------- |
+| `list`   | Search only - no details or reviews fetched |     | name, address, rating, coords, categories    |
+| `place`  | Full scrape of a single known place         |     | all fields + reviews                         |
+| `search` | Search + full scrape of every result        |     | all fields + reviews for every matched place |
 
-**`list`** — Use this to discover places and their IDs. Makes one request per page of results. Does not fetch phone numbers, opening hours, or reviews.
+**`list`** -> Use this to discover places and their IDs. Makes one request per page of results. Does not fetch phone numbers, opening hours, or reviews.
 
 ```bash
 python main.py list "web developers in Stockholm" --max-places=20
 # → quick list of matching places with place_id values
 ```
 
-**`place`** — Use this when you already have a `place_id` (from `list` or elsewhere) and want everything: full address components, phone, opening hours, and all reviews.
+**`place`** -> Use this when you already have a `place_id` (from `list` or elsewhere) and want everything: full address components, phone, opening hours, and all reviews.
 
 ```bash
 python main.py place "0x465f9b8fa03f30b3:0xb52faeba880b7674" --max-reviews=100
 # → complete data for that one place
 ```
 
-**`search`** — Combines both steps: runs a search then scrapes full details and reviews for every result. Most data, most requests.
+**`search`** -> Combines both steps: runs a search then scrapes full details and reviews for every result. Most data, most requests.
 
 ```bash
 python main.py search "hospitals in Nairobi" --max-places=5 --max-reviews=20
