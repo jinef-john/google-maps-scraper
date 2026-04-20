@@ -1,6 +1,5 @@
 """Utility functions for the Google Maps scraper."""
 
-import json
 import re
 
 
@@ -56,33 +55,6 @@ def coords_from_query(query):
             return coords
 
     return (0.0, 0.0)
-
-
-def parse_har_for_cookies(har_path):
-    """Extract Google cookies from a HAR file for session bootstrap.
-
-    Args:
-        har_path: Path to the HAR file
-
-    Returns:
-        dict of cookie name -> value
-    """
-    with open(har_path, "r") as f:
-        har = json.load(f)
-
-    cookies = {}
-    for entry in har["log"]["entries"]:
-        url = entry["request"]["url"]
-        if "google.com" in url:
-            for header in entry["request"]["headers"]:
-                if header["name"].lower() == "cookie":
-                    for part in header["value"].split(";"):
-                        part = part.strip()
-                        if "=" in part:
-                            name, _, value = part.partition("=")
-                            cookies[name.strip()] = value.strip()
-                    return cookies
-    return cookies
 
 
 def format_place_summary(place_dict, index=None):

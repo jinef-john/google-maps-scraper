@@ -5,7 +5,6 @@ import random
 import httpcloak
 
 
-# Headers observed in HAR that Google Maps expects
 MAPS_HEADERS = {
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
@@ -40,7 +39,7 @@ class Client:
 
     def warmup(self):
         """Warm up TLS session by visiting google.com first."""
-        self.session.warmup("https://www.google.com")
+        self.session.get("https://www.google.com")
         self._warmup_done = True
 
     def get(self, url, extra_headers=None):

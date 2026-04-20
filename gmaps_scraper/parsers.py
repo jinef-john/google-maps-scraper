@@ -1,9 +1,4 @@
-"""Response parsers for Google Maps internal API responses.
-
-All responses from the internal API are prefixed with )]}'\\n and contain
-nested arrays (protobuf-style JSON). These parsers extract structured data
-from those deeply nested arrays.
-"""
+"""Response parsers for Google Maps internal API responses."""
 
 import json
 import re
@@ -33,22 +28,7 @@ def _safe_get(arr, *indices, default=None):
 def parse_search_response(text):
     """Parse the search results (tbm=map) response.
 
-    Returns:
-        list of dicts with basic place info: {place_id, name, lat, lng, rating, review_count, address, categories}
-
-    The response structure (from HAR analysis):
-        Outer: {"c":0,"d":"...)]}' \\n [[...]]"} or raw )]}' prefixed
-        Inner: array with 67+ elements where listings are typically at a high index (e.g. data[64])
-        Each listing: [None, place_data_array_260_elements]
-        place_data[10] = place_id (hex)
-        place_data[11] = name
-        place_data[13] = categories (list)
-        place_data[14] = locality
-        place_data[18] = full address
-        place_data[4][7] = rating
-        place_data[4][8] = review_count
-        place_data[9][2] = lat
-        place_data[9][3] = lng
+    Returns a list of dicts: {place_id, name, lat, lng, rating, review_count, address, categories}
     """
     # Handle the outer wrapper: {"c":0,"d":"..."}
     try:
@@ -146,14 +126,8 @@ def parse_place_response(text):
 
     place = Place()
 
-    # The main place data block varies in position
-    # Usually found at data[1] or within the first few indices
-    # Based on HAR analysis, the structure is:
-    # data[1] = [session_token, ..., address_parts, ..., rating_info, ..., name, categories, ...]
-
     info = _safe_get(data, 1, default=None)
     if not info or not isinstance(info, list):
-        # Try data[6] which is another common position
         info = _safe_get(data, 6, default=[])
 
     # Place ID - usually at position that contains "0x..."
@@ -250,14 +224,14 @@ def parse_reviews_response(text):
 
 
 def _parse_single_review(entry):
-    """Parse a single review entry from the reviews array.
+    """Parse a single review entry.
 
-    Actual structure (from HAR analysis):
-        entry = [inner_list, None_or_extra, cursor_fragment]
+    Structure:
+        entry[0] = inner_list
         inner_list[0] = review_id (string)
-        inner_list[1] = metadata (16 elements): [place_id, None, ts, ts, author_block, None, date_text, ...]
-        inner_list[2] = content (16 elements): [[rating], None*13, [lang], [[text, ...]]]
-        inner_list[3] = reply (15 elements): [None, ts, ts, date_text, ..., [lang], [[reply_text, ...]]]
+        inner_list[1] = metadata: [place_id, None, ts, ts, author_block, None, date_text, ...]
+        inner_list[2] = content: [[rating], None*13, [lang], [[text, ...]]]
+        inner_list[3] = reply: [None, ts, ts, date_text, ..., [lang], [[reply_text, ...]]]
     """
     review = Review()
 
