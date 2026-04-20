@@ -107,6 +107,39 @@ def parse_search_response(text):
             "address": address,
         })
 
+    # Fallback: knowledge panel format (data[0][1] = direct entity results)
+    # Each entity has a 260-elem place block at entity[14]
+    if not results:
+        entities = _safe_get(data, 0, 1, default=[])
+        if isinstance(entities, list):
+            for entity in entities:
+                pd = _safe_get(entity, 14, default=None)
+                if not isinstance(pd, list) or len(pd) < 20:
+                    continue
+                place_id = _safe_get(pd, 10, default="")
+                if not isinstance(place_id, str) or "0x" not in place_id:
+                    continue
+                name = _safe_get(pd, 11, default="") or ""
+                lat = _safe_get(pd, 9, 2, default=0.0)
+                lng = _safe_get(pd, 9, 3, default=0.0)
+                rating_block = _safe_get(pd, 4, default=[])
+                rating = _safe_get(rating_block, 7, default=0.0) if isinstance(rating_block, list) else 0.0
+                review_count = _safe_get(rating_block, 8, default=0) if isinstance(rating_block, list) else 0
+                categories = _safe_get(pd, 13, default=[])
+                if not isinstance(categories, list):
+                    categories = []
+                address = _safe_get(pd, 18, default="") or ""
+                results.append({
+                    "place_id": place_id,
+                    "name": name,
+                    "lat": lat if isinstance(lat, (int, float)) else 0.0,
+                    "lng": lng if isinstance(lng, (int, float)) else 0.0,
+                    "rating": rating if isinstance(rating, (int, float)) else 0.0,
+                    "review_count": review_count if isinstance(review_count, int) else 0,
+                    "categories": categories,
+                    "address": address,
+                })
+
     return results
 
 
