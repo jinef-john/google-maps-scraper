@@ -11,5 +11,4 @@ build/
 .pytest_cache/
 *.log
 *.json
-!requirements.txt
-har/
+
