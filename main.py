@@ -16,7 +16,7 @@ import json
 import logging
 import sys
 
-from gmaps_scraper import GoogleMapsScraper
+from scraper import GoogleMapsScraper
 
 
 def cmd_search(args):

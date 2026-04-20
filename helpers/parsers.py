@@ -3,7 +3,7 @@
 import json
 import re
 
-from .models import Place, Review, Reviewer, OpeningHours
+from models import Place, Review, Reviewer, OpeningHours
 
 
 def _strip_xssi(text):

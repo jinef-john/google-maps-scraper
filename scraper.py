@@ -2,10 +2,10 @@
 
 import logging
 
-from .client import Client
-from .endpoints import search_url, place_url, reviews_url
-from .parsers import parse_search_response, parse_place_response, parse_reviews_response
-from .models import Place
+from helpers.client import Client
+from helpers.endpoints import search_url, place_url, reviews_url
+from helpers.parsers import parse_search_response, parse_place_response, parse_reviews_response
+from models import Place
 
 logger = logging.getLogger(__name__)
 
