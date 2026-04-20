@@ -125,7 +125,7 @@ def parse_place_response(text):
     place = Place()
 
     info = _safe_get(data, 1, default=None)
-    if not info or not isinstance(info, list):
+    if not isinstance(info, list) or len(info) < 50:
         info = _safe_get(data, 6, default=[])
 
     # Place ID - usually at position that contains "0x..."
@@ -147,6 +147,14 @@ def parse_place_response(text):
             place.rating = _safe_get(rating_block, 0, 7, default=0.0)
         if not place.review_count:
             place.review_count = _safe_get(rating_block, 0, 8, default=0)
+        if not place.review_count:
+            review_link = _safe_get(rating_block, 3, default=None)
+            if isinstance(review_link, list):
+                review_text = _safe_get(review_link, 1, default="")
+                if isinstance(review_text, str) and "review" in review_text.lower():
+                    nums = re.findall(r"\d+", review_text.replace(",", ""))
+                    if nums:
+                        place.review_count = int(nums[0])
 
     # Website
     website_block = _safe_get(info, 7, default=None)
@@ -171,10 +179,31 @@ def parse_place_response(text):
     if isinstance(categories, list):
         place.categories = [c for c in categories if isinstance(c, str)]
 
-    # Phone
-    phone = _find_phone(data)
-    if phone:
-        place.phone = phone
+    # Phone — directly at info[178][0][0], fallback to recursive search
+    phone_block = _safe_get(info, 178, default=None)
+    if isinstance(phone_block, list) and phone_block:
+        place.phone = _safe_get(phone_block, 0, 0, default="") or ""
+    if not place.phone:
+        place.phone = _find_phone(info) or ""
+
+    # Opening hours — info[203][0][0] → list of [day, idx, date, [[hours_text, times]], ...]
+    hours_block = _safe_get(info, 203, default=None)
+    if isinstance(hours_block, list):
+        days_list = _safe_get(hours_block, 0, 0, default=[])
+        if isinstance(days_list, list):
+            oh = OpeningHours()
+            for day_entry in days_list:
+                if not isinstance(day_entry, list) or len(day_entry) < 4:
+                    continue
+                day_name = _safe_get(day_entry, 0, default="")
+                hours_slots = _safe_get(day_entry, 3, default=[])
+                if isinstance(hours_slots, list) and hours_slots:
+                    hours_text = _safe_get(hours_slots, 0, 0, default="")
+                    if isinstance(day_name, str) and isinstance(hours_text, str) and day_name:
+                        oh.periods.append({"day": day_name, "hours": hours_text})
+                        oh.weekday_text.append(f"{day_name}: {hours_text}")
+            if oh.periods:
+                place.opening_hours = oh
 
     # Photos
     place.photos = _extract_photo_urls(data)
