@@ -189,7 +189,7 @@ def parse_place_response(text):
     # Opening hours — info[203][0][0] → list of [day, idx, date, [[hours_text, times]], ...]
     hours_block = _safe_get(info, 203, default=None)
     if isinstance(hours_block, list):
-        days_list = _safe_get(hours_block, 0, 0, default=[])
+        days_list = _safe_get(hours_block, 0, default=[])
         if isinstance(days_list, list):
             oh = OpeningHours()
             for day_entry in days_list:
