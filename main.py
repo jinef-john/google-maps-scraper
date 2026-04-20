@@ -113,7 +113,6 @@ def main():
     parser.add_argument("--gl", default="us", help="Country code (default: us)")
     parser.add_argument("--delay", type=float, default=1.5,
                         help="Min delay between requests in seconds (default: 1.5)")
-    parser.add_argument("--output", "-o", help="Output JSON file path")
     parser.add_argument("--quiet", "-q", action="store_true", help="Suppress progress output")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
 
@@ -127,6 +126,7 @@ def main():
     p_search.add_argument("--zoom", type=int, default=13, help="Map zoom level (default: 13)")
     p_search.add_argument("--max-places", type=int, default=20, help="Max places to scrape")
     p_search.add_argument("--max-reviews", type=int, default=50, help="Max reviews per place")
+    p_search.add_argument("--output", "-o", help="Output JSON file path")
 
     # place command
     p_place = subparsers.add_parser("place", help="Scrape a single place by ID")
@@ -134,6 +134,7 @@ def main():
     p_place.add_argument("--lat", type=float, default=0.0, help="Place latitude")
     p_place.add_argument("--lng", type=float, default=0.0, help="Place longitude")
     p_place.add_argument("--max-reviews", type=int, default=100, help="Max reviews to fetch")
+    p_place.add_argument("--output", "-o", help="Output JSON file path")
 
     # list command
     p_list = subparsers.add_parser("list", help="Search and list places (no details)")
@@ -142,6 +143,7 @@ def main():
     p_list.add_argument("--lng", type=float, default=0.0, help="Search center longitude")
     p_list.add_argument("--zoom", type=int, default=13, help="Map zoom level")
     p_list.add_argument("--max-places", type=int, default=60, help="Max results")
+    p_list.add_argument("--output", "-o", help="Output JSON file path")
 
     args = parser.parse_args()
 
