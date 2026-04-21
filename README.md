@@ -93,10 +93,20 @@ python main.py place "0x47e66e1f06e2b70f:0x40b82c3688c9460" --output details.jso
 
 ## What it extracts
 
+**Place info**
 - Name, address, coordinates
-- Rating, review count
+- Rating, review count, price level
 - Categories, website, phone number
 - Opening hours
-- Reviews with: author, rating, text, date, owner reply, language
+- Description (editorial summary)
+- About section: services, accessibility, dining options, amenities, etc. (grouped attributes with yes/no values)
+- Menu items with name, description, price (restaurants only, when available)
+- Booking / reservation links (OpenTable, TheFork, etc.)
+
+**Reviews**
+- Author name, profile URL, avatar, review count, local guide badge
+- Rating, text, language, date
+- Review photos (direct image URLs)
+- Owner reply text and date
 
 # Contributions are welcome!
