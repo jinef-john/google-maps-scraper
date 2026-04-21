@@ -43,19 +43,20 @@ def parse_search_response(text):
     if not isinstance(data, list):
         return []
 
-    # Find the listings array: list of [None, place_data] pairs
+    # Find the listings array: contains [None, 260-elem] pairs
+    # The block may start with header entries before the actual listings
     listings = []
     for i in range(len(data) - 1, -1, -1):
         elem = data[i]
-        if not isinstance(elem, list) or len(elem) < 2:
+        if not isinstance(elem, list):
             continue
-        # Check if this looks like a listings array: list of [None, [...260+...]] pairs
-        first_entry = elem[0]
-        if isinstance(first_entry, list) and len(first_entry) >= 2:
-            inner_data = first_entry[1]
-            if isinstance(inner_data, list) and len(inner_data) > 50:
-                listings = elem
-                break
+        for entry in elem:
+            if isinstance(entry, list) and len(entry) >= 2:
+                if isinstance(entry[1], list) and len(entry[1]) > 50:
+                    listings = elem
+                    break
+        if listings:
+            break
 
     results = []
     for item in listings:
