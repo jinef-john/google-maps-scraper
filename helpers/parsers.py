@@ -248,13 +248,26 @@ def parse_place_response(text):
     if isinstance(price_level, str) and price_level:
         place.price_level = price_level
 
-    # Description / editorial summary
+    # Description: editorial summary (restaurants) or hotel tagline fallback
     description = _safe_get(info, 154, 0, 0, default=None)
+    if not isinstance(description, str) or not description:
+        # Hotels use info[32]: [0][1]=short tagline, [1][1]=medium description
+        description = _safe_get(info, 32, 1, 1, default=None) or _safe_get(info, 32, 0, 1, default=None)
     if isinstance(description, str) and description:
         place.description = description
 
-    # About (services, accessibility, dining options, etc.)
+    # About: services/accessibility/dining (restaurants) + hotel amenity badges
     place.about = _parse_about(info)
+    badges_raw = _safe_get(info, 64, 2, default=None)
+    if isinstance(badges_raw, list):
+        attrs = []
+        for badge in badges_raw:
+            label = _safe_get(badge, 2, default=None)
+            has_flag = _safe_get(badge, 3, default=0)
+            if isinstance(label, str) and label:
+                attrs.append({"label": label, "present": has_flag == 1})
+        if attrs:
+            place.about.append({"group": "amenities", "attributes": attrs})
 
     # Menu (restaurants only)
     place.menu = _parse_menu(info)
