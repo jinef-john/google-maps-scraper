@@ -241,6 +241,33 @@ def parse_place_response(text):
     # Photos
     place.photos = _extract_photo_urls(data)
 
+    # Price level: info[4][2] = "$$" style, info[4][10] = "£100 or above" style
+    price_level = _safe_get(info, 4, 2, default=None)
+    if not isinstance(price_level, str) or not price_level:
+        price_level = _safe_get(info, 4, 10, default=None)
+    if isinstance(price_level, str) and price_level:
+        place.price_level = price_level
+
+    # Description / editorial summary
+    description = _safe_get(info, 154, 0, 0, default=None)
+    if isinstance(description, str) and description:
+        place.description = description
+
+    # About (services, accessibility, dining options, etc.)
+    place.about = _parse_about(info)
+
+    # Menu (restaurants only)
+    place.menu = _parse_menu(info)
+
+    # Booking / reservation links
+    booking_raw = _safe_get(info, 46, default=None)
+    if isinstance(booking_raw, list):
+        for entry in booking_raw:
+            url = _safe_get(entry, 0, default=None)
+            domain = _safe_get(entry, 1, default=None)
+            if isinstance(url, str) and url.startswith("http"):
+                place.booking_links.append({"url": url, "domain": domain or ""})
+
     # Featured review snippets
     place.featured_review_snippets = _extract_review_snippets(info)
 
@@ -355,7 +382,13 @@ def _parse_single_review(entry):
                     review.text = tb[0]
                     break
 
-    # Reply block (inner[3])
+        # Photos: content[2] = list of photo objects; URL at photo[1][6][0]
+        photo_entries = _safe_get(content, 2, default=[])
+        if isinstance(photo_entries, list):
+            for photo in photo_entries:
+                url = _safe_get(photo, 1, 6, 0, default=None)
+                if isinstance(url, str) and url.startswith("http"):
+                    review.photos.append(url)
     reply = _safe_get(inner, 3, default=None)
     if isinstance(reply, list) and len(reply) > 3:
         # Reply date: reply[3]
@@ -368,10 +401,6 @@ def _parse_single_review(entry):
                 if isinstance(tb, list) and tb and isinstance(tb[0], str):
                     review.owner_reply = tb[0]
                     break
-
-    # Photos from review content
-    photos = _extract_review_photos(inner)
-    review.photos = photos
 
     return review
 
@@ -443,7 +472,6 @@ def _extract_review_snippets(info):
     if not isinstance(info, list):
         return snippets
 
-    # Search through the info array for quoted review text
     def _search(obj, depth=0):
         if depth > 6 or len(snippets) >= 5:
             return
@@ -457,19 +485,71 @@ def _extract_review_snippets(info):
     return snippets
 
 
-def _extract_review_photos(entry):
-    """Extract photo URLs from a single review entry."""
-    photos = []
-    photo_pattern = re.compile(r"https://lh[35]\.googleusercontent\.com/[^\s\"]+")
+def _parse_about(info):
+    """Parse the about/services/accessibility section from info[100].
 
-    def _search(obj, depth=0):
-        if depth > 5 or len(photos) >= 10:
-            return
-        if isinstance(obj, str) and "googleusercontent.com/geougc" in obj:
-            photos.append(obj)
-        elif isinstance(obj, list):
-            for item in obj[:20]:
-                _search(item, depth + 1)
+    Returns a list of {group, attributes: [{label, present}]} dicts.
+    """
+    # info[100] = [null, [group1, group2, ...]]
+    # Each group: [group_uri_or_null, group_label, [attr1, attr2, ...], ...]
+    # Each attr:  [attr_uri, label, [1, [[present_int, text]], [present_int, ...]], ...]
+    groups_raw = _safe_get(info, 100, 1, default=None)
+    if not isinstance(groups_raw, list):
+        return []
 
-    _search(entry)
-    return photos
+    result = []
+    for group in groups_raw:
+        if not isinstance(group, list) or len(group) < 2:
+            continue
+        group_name = _safe_get(group, 0, default="") or ""
+        attrs_raw = _safe_get(group, 2, default=None)
+        if not isinstance(attrs_raw, list):
+            attrs_raw = _safe_get(group, 1, default=[]) or []
+        attrs = []
+        for attr in attrs_raw:
+            if not isinstance(attr, list):
+                continue
+            label = _safe_get(attr, 1, default=None)
+            if not isinstance(label, str) or not label:
+                continue
+            present = _safe_get(attr, 2, 2, 0, default=None)
+            attrs.append({"label": label, "present": present == 1})
+        if attrs:
+            result.append({"group": group_name, "attributes": attrs})
+
+    return result
+
+
+def _parse_menu(info):
+    """Parse embedded menu data from info[125] (restaurants only).
+
+    Returns a list of {category, items: [{name, description, price, photo}]} dicts.
+    """
+    # info[125][0] = list of menu books; each book[1] = list of categories
+    books = _safe_get(info, 125, 0, default=None)
+    if not isinstance(books, list):
+        return []
+
+    result = []
+    for book in books:
+        categories_raw = _safe_get(book, 1, default=None)
+        if not isinstance(categories_raw, list):
+            continue
+        for cat in categories_raw:
+            cat_name = _safe_get(cat, 0, 0, default="") or ""
+            items_raw = _safe_get(cat, 1, default=None)
+            if not isinstance(items_raw, list):
+                continue
+            items = []
+            for item in items_raw:
+                name = _safe_get(item, 0, 0, 0, default="") or ""
+                if not name:
+                    continue
+                desc = _safe_get(item, 0, 0, 1, default="") or ""
+                price = _safe_get(item, 1, 0, default="") or ""
+                photo_url = _safe_get(item, 5, 0, 0, default="") or ""
+                items.append({"name": name, "description": desc, "price": price, "photo": photo_url})
+            if items:
+                result.append({"category": cat_name, "items": items})
+
+    return result
