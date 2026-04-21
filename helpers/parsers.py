@@ -5,14 +5,12 @@ from models import Place, Review, Reviewer, OpeningHours
 
 
 def _strip_xssi(text):
-    """Remove the XSSI/anti-hijacking prefix from Google responses."""
     if text.startswith(")]}'"):
         text = text[4:].lstrip("\n")
     return text
 
 
 def _safe_get(arr, *indices, default=None):
-    """Safely traverse nested arrays by index path."""
     current = arr
     for idx in indices:
         if not isinstance(current, (list, tuple)):
@@ -24,11 +22,7 @@ def _safe_get(arr, *indices, default=None):
 
 
 def parse_search_response(text):
-    """Parse the search results (tbm=map) response.
-
-    Returns a list of dicts: {place_id, name, lat, lng, rating, review_count, address, categories}
-    """
-    # Handle the outer wrapper: {"c":0,"d":"..."}
+    # outer wrapper: {"c":0,"d":"..."}
     try:
         decoder = json.JSONDecoder()
         outer, _ = decoder.raw_decode(text)
@@ -49,8 +43,7 @@ def parse_search_response(text):
     if not isinstance(data, list):
         return []
 
-    # Find the listings array: it's a list of [None, place_data] pairs
-    # Usually at a high index in the root array (e.g. data[64])
+    # Find the listings array: list of [None, place_data] pairs
     listings = []
     for i in range(len(data) - 1, -1, -1):
         elem = data[i]
@@ -144,10 +137,6 @@ def parse_search_response(text):
 
 
 def parse_place_response(text):
-    """Parse the place details (/maps/preview/place) response.
-
-    Returns a Place object with all available data.
-    """
     text = _strip_xssi(text)
 
     try:
@@ -281,21 +270,10 @@ def parse_place_response(text):
             if isinstance(url, str) and url.startswith("http"):
                 place.booking_links.append({"url": url, "domain": domain or ""})
 
-    # Featured review snippets
-    place.featured_review_snippets = _extract_review_snippets(info)
-
-    # Store raw data for advanced users
-    place.raw_data = data
-
     return place
 
 
 def parse_reviews_response(text):
-    """Parse the reviews listing (/maps/rpc/listugcposts) response.
-
-    Returns:
-        tuple: (list of Review objects, next_cursor string or None)
-    """
     text = _strip_xssi(text)
 
     try:
@@ -324,15 +302,6 @@ def parse_reviews_response(text):
 
 
 def _parse_single_review(entry):
-    """Parse a single review entry.
-
-    Structure:
-        entry[0] = inner_list
-        inner_list[0] = review_id (string)
-        inner_list[1] = metadata: [place_id, None, ts, ts, author_block, None, date_text, ...]
-        inner_list[2] = content: [[rating], None*13, [lang], [[text, ...]]]
-        inner_list[3] = reply: [None, ts, ts, date_text, ..., [lang], [[reply_text, ...]]]
-    """
     review = Review()
 
     # entry[0] is the inner review list
@@ -419,7 +388,6 @@ def _parse_single_review(entry):
 
 
 def _find_place_id(data):
-    """Recursively search for a place ID string (0x...format)."""
     pattern = re.compile(r"0x[0-9a-f]+:0x[0-9a-f]+")
 
     def _search(obj, depth=0):
@@ -440,7 +408,6 @@ def _find_place_id(data):
 
 
 def _find_phone(data):
-    """Search for phone number pattern in the data."""
     phone_pattern = re.compile(r"\+?\d[\d\s\-()]{7,}")
 
     def _search(obj, depth=0):
@@ -459,9 +426,7 @@ def _find_phone(data):
 
 
 def _extract_photo_urls(data):
-    """Extract photo URLs from the response data."""
     photos = []
-    photo_pattern = re.compile(r"https://lh[35]\.googleusercontent\.com/[^\s\"]+")
 
     def _search(obj, depth=0):
         if depth > 8:
@@ -476,36 +441,12 @@ def _extract_photo_urls(data):
                     return
 
     _search(data)
-    return list(dict.fromkeys(photos))[:20]  # deduplicate, max 20
-
-
-def _extract_review_snippets(info):
-    """Extract featured review snippets from place info."""
-    snippets = []
-    if not isinstance(info, list):
-        return snippets
-
-    def _search(obj, depth=0):
-        if depth > 6 or len(snippets) >= 5:
-            return
-        if isinstance(obj, str) and obj.startswith('"') and obj.endswith('"'):
-            snippets.append(obj.strip('"'))
-        elif isinstance(obj, list):
-            for item in obj[:30]:
-                _search(item, depth + 1)
-
-    _search(info)
-    return snippets
+    return list(dict.fromkeys(photos))[:20]
 
 
 def _parse_about(info):
-    """Parse the about/services/accessibility section from info[100].
-
-    Returns a list of {group, attributes: [{label, present}]} dicts.
-    """
-    # info[100] = [null, [group1, group2, ...]]
-    # Each group: [group_uri_or_null, group_label, [attr1, attr2, ...], ...]
-    # Each attr:  [attr_uri, label, [1, [[present_int, text]], [present_int, ...]], ...]
+    # info[100][1] = [group, ...]  group: [uri, label, [attrs, ...]]
+    # attr: [uri, label, [1, [[present_int, ...]], ...]]
     groups_raw = _safe_get(info, 100, 1, default=None)
     if not isinstance(groups_raw, list):
         return []
@@ -534,13 +475,8 @@ def _parse_about(info):
 
 
 def _parse_menu(info):
-    """Parse embedded menu data from info[125] (restaurants only).
-
-    Returns a list of {category, items: [{name, description, price, photo}]} dicts.
-    """
-    # info[125][0][0][1] = list of sections
-    # section[0][0] = section name, section[1][0] = flat items list
-    # item[0][0] = name, item[0][1] = description, item[1][0] = price (optional)
+    # info[125][0][0][1] = sections; section[0][0]=name, section[1][0]=items
+    # item[0][0]=name, item[0][1]=desc, item[1][0]=price
     sections = _safe_get(info, 125, 0, 0, 1, default=None)
     if not isinstance(sections, list):
         return []
