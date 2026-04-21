@@ -124,14 +124,14 @@ def main():
     p_search.add_argument("--zoom", type=int, default=13)
     p_search.add_argument("--max-places", type=int, default=20)
     p_search.add_argument("--max-reviews", type=int, default=50)
-    p_search.add_argument("--db", default="gmaps.db", help="SQLite output (default: gmaps.db)")
+    p_search.add_argument("--db", default="output/gmaps.db", help="SQLite output (default: output/gmaps.db)")
 
     p_place = subparsers.add_parser("place", help="Scrape a single place by ID")
     p_place.add_argument("place_id")
     p_place.add_argument("--lat", type=float, default=0.0)
     p_place.add_argument("--lng", type=float, default=0.0)
     p_place.add_argument("--max-reviews", type=int, default=100)
-    p_place.add_argument("--db", default="gmaps.db", help="SQLite output (default: gmaps.db)")
+    p_place.add_argument("--db", default="output/gmaps.db", help="SQLite output (default: output/gmaps.db)")
 
     p_list = subparsers.add_parser("list", help="Search and list places (no scraping)")
     p_list.add_argument("query")

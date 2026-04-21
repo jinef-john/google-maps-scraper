@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 
 _SCHEMA = """
@@ -46,6 +47,9 @@ CREATE TABLE IF NOT EXISTS reviews (
 
 class Database:
     def __init__(self, path):
+        dirpath = os.path.dirname(path)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
         self.conn = sqlite3.connect(path)
         self.conn.executescript(_SCHEMA)
         self.conn.commit()
