@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS places (
     about         TEXT,
     menu          TEXT,
     booking_links TEXT,
+    reviews_fetched INTEGER DEFAULT 0,
     scraped_at    TEXT DEFAULT (datetime('now'))
 );
 
@@ -100,6 +101,12 @@ class Database:
                 json.dumps(review.photos),
                 review.owner_reply, review.owner_reply_date,
             ),
+        )
+        self.conn.commit()
+
+    def mark_reviews_fetched(self, place_id):
+        self.conn.execute(
+            "UPDATE places SET reviews_fetched = 1 WHERE place_id = ?", (place_id,)
         )
         self.conn.commit()
 
