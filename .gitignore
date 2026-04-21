@@ -11,4 +11,5 @@ build/
 .pytest_cache/
 *.log
 *.json
-
+*.db
+output/

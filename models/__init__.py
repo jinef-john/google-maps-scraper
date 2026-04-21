@@ -1,5 +1,3 @@
-"""Data models for Google Maps scraper results."""
-
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -29,7 +27,7 @@ class Review:
 
 @dataclass
 class OpeningHours:
-    periods: list = field(default_factory=list)  # list of day/time dicts
+    periods: list = field(default_factory=list)
     weekday_text: list = field(default_factory=list)
 
 
@@ -53,17 +51,12 @@ class Place:
     about: list = field(default_factory=list)
     menu: list = field(default_factory=list)
     booking_links: list = field(default_factory=list)
-    featured_review_snippets: list = field(default_factory=list)
-    reviews: list = field(default_factory=list)
-    raw_data: dict = field(default_factory=dict)
 
     def to_dict(self):
-        """Convert to a serializable dictionary."""
         d = {
             "place_id": self.place_id,
             "name": self.name,
             "address": self.address,
-            "address_components": self.address_components,
             "coordinates": {"lat": self.lat, "lng": self.lng},
             "rating": self.rating,
             "review_count": self.review_count,
@@ -76,31 +69,10 @@ class Place:
             "menu": self.menu,
             "booking_links": self.booking_links,
             "photos": self.photos,
-            "featured_review_snippets": self.featured_review_snippets,
         }
         if self.opening_hours:
             d["opening_hours"] = {
                 "periods": self.opening_hours.periods,
                 "weekday_text": self.opening_hours.weekday_text,
             }
-        if self.reviews:
-            d["reviews"] = [
-                {
-                    "reviewer": {
-                        "name": r.reviewer.name,
-                        "profile_url": r.reviewer.profile_url,
-                        "avatar_url": r.reviewer.avatar_url,
-                        "review_count": r.reviewer.review_count,
-                        "is_local_guide": r.reviewer.is_local_guide,
-                    },
-                    "rating": r.rating,
-                    "text": r.text,
-                    "date": r.date,
-                    "photos": r.photos,
-                    "owner_reply": r.owner_reply,
-                    "owner_reply_date": r.owner_reply_date,
-                    "language": r.language,
-                }
-                for r in self.reviews
-            ]
         return d
