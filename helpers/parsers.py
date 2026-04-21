@@ -538,31 +538,33 @@ def _parse_menu(info):
 
     Returns a list of {category, items: [{name, description, price, photo}]} dicts.
     """
-    # info[125][0] = list of menu books; each book[1] = list of categories
-    books = _safe_get(info, 125, 0, default=None)
-    if not isinstance(books, list):
+    # info[125][0][0][1] = list of sections
+    # section[0][0] = section name, section[1][0] = flat items list
+    # item[0][0] = name, item[0][1] = description, item[1][0] = price (optional)
+    sections = _safe_get(info, 125, 0, 0, 1, default=None)
+    if not isinstance(sections, list):
         return []
 
     result = []
-    for book in books:
-        categories_raw = _safe_get(book, 1, default=None)
-        if not isinstance(categories_raw, list):
+    for section in sections:
+        if not isinstance(section, list) or len(section) < 2:
             continue
-        for cat in categories_raw:
-            cat_name = _safe_get(cat, 0, 0, default="") or ""
-            items_raw = _safe_get(cat, 1, default=None)
-            if not isinstance(items_raw, list):
+        category = _safe_get(section, 0, 0, default="") or ""
+        items_raw = _safe_get(section, 1, 0, default=None)
+        if not isinstance(items_raw, list):
+            continue
+        items = []
+        for item in items_raw:
+            if not isinstance(item, list):
                 continue
-            items = []
-            for item in items_raw:
-                name = _safe_get(item, 0, 0, 0, default="") or ""
-                if not name:
-                    continue
-                desc = _safe_get(item, 0, 0, 1, default="") or ""
-                price = _safe_get(item, 1, 0, default="") or ""
-                photo_url = _safe_get(item, 5, 0, 0, default="") or ""
-                items.append({"name": name, "description": desc, "price": price, "photo": photo_url})
-            if items:
-                result.append({"category": cat_name, "items": items})
+            name = _safe_get(item, 0, 0, default="") or ""
+            if not name:
+                continue
+            desc = _safe_get(item, 0, 1, default="") or ""
+            price = _safe_get(item, 1, 0, default="") or ""
+            photo_url = _safe_get(item, 5, 0, 0, default="") or ""
+            items.append({"name": name, "description": desc, "price": price, "photo": photo_url})
+        if items:
+            result.append({"category": category, "items": items})
 
     return result
