@@ -36,8 +36,9 @@ class Client:
         self._max_delay = 3.0
 
     def warmup(self):
-        """Warm up TLS session by visiting google.com first."""
+        """Warm up TLS session and establish Maps context."""
         self.session.get("https://www.google.com")
+        self.session.get("https://www.google.com/maps")
         self._warmup_done = True
 
     def get(self, url, extra_headers=None):

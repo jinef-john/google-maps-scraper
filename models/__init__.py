@@ -50,6 +50,9 @@ class Place:
     photos: list = field(default_factory=list)
     price_level: str = ""
     description: str = ""
+    about: list = field(default_factory=list)
+    menu: list = field(default_factory=list)
+    booking_links: list = field(default_factory=list)
     featured_review_snippets: list = field(default_factory=list)
     reviews: list = field(default_factory=list)
     raw_data: dict = field(default_factory=dict)
@@ -69,6 +72,9 @@ class Place:
             "phone": self.phone,
             "price_level": self.price_level,
             "description": self.description,
+            "about": self.about,
+            "menu": self.menu,
+            "booking_links": self.booking_links,
             "photos": self.photos,
             "featured_review_snippets": self.featured_review_snippets,
         }

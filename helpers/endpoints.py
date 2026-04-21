@@ -87,6 +87,16 @@ def place_url(place_id, lat, lng, query="", lang="en", gl="us"):
         f"!3m1!1d1000"
         f"!4m2!3d{lat}!4d{lng}"
         "!3m1!1e3"
+        "!15m111!1m29!4e2!13m9!2b1!3b1!4b1!6i1!8b1!9b1!14b1!20b1!25b1"
+        "!18m17!3b1!4b1!5b1!6b1!9b1!13b1!14b1!17b1!20b1!21b1!22b1!30b1!32b1!33m1!1b1!34b1!36e2"
+        "!10m1!8e3!11m1!3e1!17b1!20m2!1e3!1e6!24b1!25b1!26b1!27b1!29b1!30m1!2b1!36b1!37b1"
+        "!39m3!2m2!2i1!3i1!43b1!52b1!54m1!1b1!55b1!56m1!1b1!61m2!1m1!1e1"
+        "!65m5!3m4!1m3!1m2!1i224!2i298"
+        "!72m22!1m8!2b1!5b1!7b1!12m4!1b1!2b1!4m1!1e1!4b1"
+        "!8m10!1m6!4m1!1e1!4m1!1e3!4m1!1e4"
+        "!3sother_user_google_review_posts__and__hotel_and_vr_partner_review_posts"
+        "!6m1!1e1!9b1!89b1!90m2!1m1!1e2!98m3!1b1!2b1!3b1"
+        "!103b1!113b1!114m3!1b1!2m1!1b1!117b1!122m1!1b1!126b1!127b1!128m1!1b0"
     )
 
     url = f"{BASE}/maps/preview/place?authuser=0&hl={lang}&gl={gl}&pb={pb}"
