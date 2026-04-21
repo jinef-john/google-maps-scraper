@@ -10,6 +10,8 @@ pip install -r requirements.txt
 
 ## Usage
 
+- Default db path is `output/gmaps.db` but you can specify any path with `--db`.
+
 ### List places (search only, no scraping)
 
 ```bash
@@ -20,14 +22,21 @@ python main.py list "hospitals in Nairobi"
 ### Scrape a single place by ID
 
 ```bash
-python main.py place "0x465f9b8fa03f30b3:0xb52faeba880b7674" --max-reviews=100
+python main.py place "0x465f9b8fa03f30b3:0xb52faeba880b7674" --max-reviews=100 --db output/places.db
 ```
 
 ### Search and scrape all results
 
 ```bash
-python main.py search "coffee shops in London" --max-places=10 --max-reviews=50
-python main.py search "restaurants in Nairobi" --db nairobi.db
+python main.py search "coffee shops in London" --max-places=10 --max-reviews=50 --db output/london.db
+python main.py search "restaurants in Nairobi" --db output/nairobi.db
+```
+
+### Place details only, no reviews
+
+```bash
+python main.py search "hotels in London" --max-places=20 --max-reviews=0
+python main.py place "0x465f9b8fa03f30b3:0xb52faeba880b7674" --max-reviews=0
 ```
 
 ## Commands
@@ -48,13 +57,13 @@ python main.py list "web developers in Stockholm" --max-places=20
 **`place`** -> Use when you already have a `place_id` (from `list` or elsewhere). Fetches full details and reviews, saves to DB.
 
 ```bash
-python main.py place "0x465f9b8fa03f30b3:0xb52faeba880b7674" --max-reviews=100 --db out.db
+python main.py place "0x465f9b8fa03f30b3:0xb52faeba880b7674" --max-reviews=100 --db output/places.db
 ```
 
 **`search`** -> Runs a search then scrapes full details and reviews for every result. Most data, most requests.
 
 ```bash
-python main.py search "hospitals in Nairobi" --max-places=5 --max-reviews=20 --db nairobi.db
+python main.py search "hospitals in Nairobi" --max-places=5 --max-reviews=20 --db output/nairobi.db
 ```
 
 **Typical workflow:**
@@ -66,9 +75,6 @@ python main.py list "coffee shops in Paris" --max-places=20
 # Step 2: scrape a specific one in full
 python main.py place "0x47e671fd3387e0dd:0x174ea8ece7dffa45" --max-reviews=200 --db output/paris.db
 
-# Step 3: query the results
-sqlite3 output/paris.db "SELECT name, rating, review_count, price_level FROM places;"
-sqlite3 output/paris.db "SELECT reviewer_name, rating, text FROM reviews WHERE place_id = '...';"
 ```
 
 ## Options
@@ -77,7 +83,7 @@ sqlite3 output/paris.db "SELECT reviewer_name, rating, text FROM reviews WHERE p
 | --------------- | ------------------------------------------ | ---------------------------- |
 | `--db`          | SQLite database path                       | `output/gmaps.db`            |
 | `--max-places`  | Max number of places to return             | 20                           |
-| `--max-reviews` | Max reviews to fetch per place             | 50 (`search`), 100 (`place`) |
+| `--max-reviews` | Max reviews per place (`0` = skip reviews) | 50 (`search`), 100 (`place`) |
 | `--lat / --lng` | Center coordinates (optional)              | 0                            |
 | `--proxy`       | Proxy URL (`socks5://...` or `http://...`) | None                         |
 | `--lang`        | Language code                              | `en`                         |
@@ -93,6 +99,13 @@ Results are saved to two tables:
 - `place_id`, `name`, `address`, `lat`, `lng`, `rating`, `review_count`
 - `website`, `phone`, `price_level`, `description`
 - `categories`, `hours`, `photos`, `about`, `menu`, `booking_links` (JSON columns)
+- `reviews_fetched` - `0` if only place details were saved, `1` once reviews have been fetched
+
+Use `reviews_fetched` to find places that still need reviews scraped:
+
+```sql
+SELECT place_id, name FROM places WHERE reviews_fetched = 0;
+```
 
 **`reviews`** -> one row per review, deduplicated on `review_id`
 
@@ -106,9 +119,6 @@ Results are saved to two tables:
 - Name, address, coordinates
 - Rating, review count, price level
 - Categories, website, phone number
-
-  > below if available:
-
 - Opening hours
 - Description (editorial summary)
 - About section: services, accessibility, dining options, amenities (grouped yes/no attributes)
