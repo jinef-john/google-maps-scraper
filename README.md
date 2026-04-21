@@ -10,7 +10,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-- Default db path is `output/gmaps.db` but you can specify any path with `--db`.
+- sqlite3: Default db path is `output/gmaps.db` but you can specify any path with `--db`.
 
 ### List places (search only, no scraping)
 
