@@ -51,9 +51,11 @@ def cmd_search(args):
 
             db.upsert_place(place)
             reviews_saved = 0
-            for review in scraper.iter_reviews(result["place_id"], args.max_reviews):
-                db.insert_review(result["place_id"], review)
-                reviews_saved += 1
+            if args.max_reviews != 0:
+                for review in scraper.iter_reviews(result["place_id"], args.max_reviews):
+                    db.insert_review(result["place_id"], review)
+                    reviews_saved += 1
+                db.mark_reviews_fetched(result["place_id"])
 
             if not args.quiet:
                 _print_place_summary(place, index=i, reviews_saved=reviews_saved)
@@ -77,9 +79,11 @@ def cmd_place(args):
 
         db.upsert_place(place)
         reviews_saved = 0
-        for review in scraper.iter_reviews(args.place_id, args.max_reviews):
-            db.insert_review(args.place_id, review)
-            reviews_saved += 1
+        if args.max_reviews != 0:
+            for review in scraper.iter_reviews(args.place_id, args.max_reviews):
+                db.insert_review(args.place_id, review)
+                reviews_saved += 1
+            db.mark_reviews_fetched(args.place_id)
 
     _print_place_summary(place, reviews_saved=reviews_saved)
     print(f"Saved to {args.db}", file=sys.stderr)
@@ -123,14 +127,16 @@ def main():
     p_search.add_argument("--lng", type=float, default=0.0)
     p_search.add_argument("--zoom", type=int, default=13)
     p_search.add_argument("--max-places", type=int, default=20)
-    p_search.add_argument("--max-reviews", type=int, default=50)
+    p_search.add_argument("--max-reviews", type=int, default=50,
+                          help="Max reviews per place (0 = skip reviews, default: 50)")
     p_search.add_argument("--db", default="output/gmaps.db", help="SQLite output (default: output/gmaps.db)")
 
     p_place = subparsers.add_parser("place", help="Scrape a single place by ID")
     p_place.add_argument("place_id")
     p_place.add_argument("--lat", type=float, default=0.0)
     p_place.add_argument("--lng", type=float, default=0.0)
-    p_place.add_argument("--max-reviews", type=int, default=100)
+    p_place.add_argument("--max-reviews", type=int, default=100,
+                         help="Max reviews to fetch (0 = skip reviews, default: 100)")
     p_place.add_argument("--db", default="output/gmaps.db", help="SQLite output (default: output/gmaps.db)")
 
     p_list = subparsers.add_parser("list", help="Search and list places (no scraping)")
