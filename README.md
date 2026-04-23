@@ -132,7 +132,7 @@ SELECT place_id, name FROM places WHERE reviews_fetched = 0;
 - Review photos (direct image URLs)
 - Owner reply text and date
 
-# Contributions are welcome!
+### You can open issues for bug reports, feature requests, or questions. Pull requests are also welcome if you'd like to contribute code or improvements.
 
 ## Disclaimer
 
