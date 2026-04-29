@@ -1,5 +1,6 @@
+"""Data models for places, reviews, and related entities."""
+
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -18,11 +19,29 @@ class Review:
     rating: int = 0
     text: str = ""
     date: str = ""
+    language: str = ""
     photos: list = field(default_factory=list)
     owner_reply: str = ""
     owner_reply_date: str = ""
-    language: str = ""
     review_id: str = ""
+
+    def to_dict(self):
+        return {
+            "review_id": self.review_id,
+            "reviewer_name": self.reviewer.name,
+            "reviewer_profile_url": self.reviewer.profile_url,
+            "reviewer_avatar_url": self.reviewer.avatar_url,
+            "reviewer_user_id": self.reviewer.user_id,
+            "reviewer_review_count": self.reviewer.review_count,
+            "reviewer_is_local_guide": self.reviewer.is_local_guide,
+            "rating": self.rating,
+            "text": self.text,
+            "date": self.date,
+            "language": self.language,
+            "photos": self.photos,
+            "owner_reply": self.owner_reply,
+            "owner_reply_date": self.owner_reply_date,
+        }
 
 
 @dataclass
@@ -44,7 +63,7 @@ class Place:
     categories: list = field(default_factory=list)
     website: str = ""
     phone: str = ""
-    opening_hours: Optional[OpeningHours] = None
+    opening_hours: OpeningHours | None = None
     photos: list = field(default_factory=list)
     price_level: str = ""
     description: str = ""
@@ -57,6 +76,7 @@ class Place:
             "place_id": self.place_id,
             "name": self.name,
             "address": self.address,
+            "address_components": self.address_components,
             "coordinates": {"lat": self.lat, "lng": self.lng},
             "rating": self.rating,
             "review_count": self.review_count,
