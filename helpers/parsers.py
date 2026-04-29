@@ -1,7 +1,9 @@
+"""Response parsers for Google Maps search, place details, and reviews."""
+
 import json
 import re
 
-from models import Place, Review, Reviewer, OpeningHours
+from models import OpeningHours, Place, Review, Reviewer
 
 
 def _strip_xssi(text):
@@ -10,8 +12,8 @@ def _strip_xssi(text):
     return text
 
 
-def _safe_get(arr, *indices, default=None):
-    current = arr
+def _get(data, *indices, default=None):
+    current = data
     for idx in indices:
         if not isinstance(current, (list, tuple)):
             return default
@@ -21,20 +23,127 @@ def _safe_get(arr, *indices, default=None):
     return current if current is not None else default
 
 
+def _find_place_id(data):
+    pat = re.compile(r"0x[0-9a-f]+:0x[0-9a-f]+")
+
+    def _search(obj, depth=0):
+        if depth > 5:
+            return None
+        if isinstance(obj, str):
+            m = pat.search(obj)
+            return m.group(0) if m else None
+        if isinstance(obj, list):
+            for item in obj[:20]:
+                r = _search(item, depth + 1)
+                if r:
+                    return r
+        return None
+
+    return _search(data)
+
+
+def _find_phone(data):
+    pat = re.compile(r"\+?\d[\d\s\-()]{7,}")
+
+    def _search(obj, depth=0):
+        if depth > 6:
+            return None
+        if isinstance(obj, str) and pat.match(obj) and len(obj) < 25:
+            return obj
+        if isinstance(obj, list):
+            for item in obj[:30]:
+                r = _search(item, depth + 1)
+                if r:
+                    return r
+        return None
+
+    return _search(data)
+
+
+def _extract_photos(data, limit=20):
+    photos = []
+
+    def _search(obj, depth=0):
+        if depth > 8 or len(photos) >= limit:
+            return
+        if isinstance(obj, str) and "googleusercontent.com" in obj and obj.startswith("http"):
+            photos.append(obj)
+        elif isinstance(obj, list):
+            for item in obj[:50]:
+                _search(item, depth + 1)
+
+    _search(data)
+    return list(dict.fromkeys(photos))[:limit]
+
+
+def _parse_about(info):
+    groups_raw = _get(info, 100, 1)
+    if not isinstance(groups_raw, list):
+        return []
+
+    result = []
+    for group in groups_raw:
+        if not isinstance(group, list) or len(group) < 2:
+            continue
+        gname = _get(group, 0, default="") or ""
+        attrs_raw = _get(group, 2)
+        if not isinstance(attrs_raw, list):
+            attrs_raw = _get(group, 1) or []
+        attrs = []
+        for attr in attrs_raw if isinstance(attrs_raw, list) else []:
+            if not isinstance(attr, list):
+                continue
+            label = _get(attr, 1)
+            if not isinstance(label, str) or not label:
+                continue
+            present = _get(attr, 2, 2, 0)
+            attrs.append({"label": label, "present": present == 1})
+        if attrs:
+            result.append({"group": gname, "attributes": attrs})
+    return result
+
+
+def _parse_menu(info):
+    sections = _get(info, 125, 0, 0, 1)
+    if not isinstance(sections, list):
+        return []
+
+    result = []
+    for section in sections:
+        if not isinstance(section, list) or len(section) < 2:
+            continue
+        category = _get(section, 0, 0, default="") or ""
+        items_raw = _get(section, 1, 0)
+        if not isinstance(items_raw, list):
+            continue
+        items = []
+        for item in items_raw:
+            if not isinstance(item, list):
+                continue
+            name = _get(item, 0, 0, default="") or ""
+            if not name:
+                continue
+            items.append({
+                "name": name,
+                "description": _get(item, 0, 1, default="") or "",
+                "price": _get(item, 1, 0, default="") or "",
+                "photo": _get(item, 5, 0, 0, default="") or "",
+            })
+        if items:
+            result.append({"category": category, "items": items})
+    return result
+
+
 def parse_search_response(text):
-    # outer wrapper: {"c":0,"d":"..."}
+    """Parse search results into place stubs."""
     try:
         decoder = json.JSONDecoder()
         outer, _ = decoder.raw_decode(text)
-        if isinstance(outer, dict) and "d" in outer:
-            inner_text = outer["d"]
-        else:
-            inner_text = text
-    except (json.JSONDecodeError, ValueError):
+        inner_text = outer["d"] if isinstance(outer, dict) and "d" in outer else text
+    except Exception:
         inner_text = text
 
     inner_text = _strip_xssi(inner_text)
-
     try:
         data = json.loads(inner_text)
     except json.JSONDecodeError:
@@ -43,8 +152,7 @@ def parse_search_response(text):
     if not isinstance(data, list):
         return []
 
-    # Find the listings array: contains [None, 260-elem] pairs
-    # The block may start with header entries before the actual listings
+    # Find the listings array
     listings = []
     for i in range(len(data) - 1, -1, -1):
         elem = data[i]
@@ -58,216 +166,177 @@ def parse_search_response(text):
         if listings:
             break
 
+    def _extract(pd):
+        pid = _get(pd, 10, default="")
+        if not isinstance(pid, str) or "0x" not in pid:
+            return None
+        rb = _get(pd, 4, default=[])
+        cats = _get(pd, 13, default=[])
+        if isinstance(cats, str):
+            cats = [cats]
+        elif not isinstance(cats, list):
+            cats = []
+        return {
+            "place_id": pid,
+            "name": _get(pd, 11, default="") or "",
+            "lat": _get(pd, 9, 2, default=0.0),
+            "lng": _get(pd, 9, 3, default=0.0),
+            "rating": _get(rb, 7, default=0.0) if isinstance(rb, list) else 0.0,
+            "review_count": _get(rb, 8, default=0) if isinstance(rb, list) else 0,
+            "categories": cats,
+            "address": _get(pd, 18, default="") or "",
+        }
+
     results = []
     for item in listings:
-        if not isinstance(item, list) or len(item) < 2:
-            continue
+        if isinstance(item, list) and len(item) >= 2:
+            r = _extract(item[1])
+            if r:
+                results.append(r)
 
-        pd = item[1]
-        if not isinstance(pd, list) or len(pd) < 20:
-            continue
-
-        place_id = _safe_get(pd, 10, default="")
-        if not isinstance(place_id, str) or "0x" not in place_id:
-            continue
-
-        name = _safe_get(pd, 11, default="") or ""
-        lat = _safe_get(pd, 9, 2, default=0.0)
-        lng = _safe_get(pd, 9, 3, default=0.0)
-
-        # Rating block at pd[4]
-        rating_block = _safe_get(pd, 4, default=[])
-        rating = _safe_get(rating_block, 7, default=0.0) if isinstance(rating_block, list) else 0.0
-        review_count = _safe_get(rating_block, 8, default=0) if isinstance(rating_block, list) else 0
-
-        # Categories at pd[13]
-        categories = _safe_get(pd, 13, default=[])
-        if isinstance(categories, str):
-            categories = [categories]
-        elif not isinstance(categories, list):
-            categories = []
-
-        # Address at pd[18]
-        address = _safe_get(pd, 18, default="") or ""
-
-        results.append({
-            "place_id": place_id,
-            "name": name,
-            "lat": lat if isinstance(lat, (int, float)) else 0.0,
-            "lng": lng if isinstance(lng, (int, float)) else 0.0,
-            "rating": rating if isinstance(rating, (int, float)) else 0.0,
-            "review_count": review_count if isinstance(review_count, int) else 0,
-            "categories": categories,
-            "address": address,
-        })
-
-    # Fallback: knowledge panel format (data[0][1] = direct entity results)
-    # Each entity has a 260-elem place block at entity[14]
+    # Fallback: knowledge panel format
     if not results:
-        entities = _safe_get(data, 0, 1, default=[])
+        entities = _get(data, 0, 1, default=[])
         if isinstance(entities, list):
             for entity in entities:
-                pd = _safe_get(entity, 14, default=None)
-                if not isinstance(pd, list) or len(pd) < 20:
-                    continue
-                place_id = _safe_get(pd, 10, default="")
-                if not isinstance(place_id, str) or "0x" not in place_id:
-                    continue
-                name = _safe_get(pd, 11, default="") or ""
-                lat = _safe_get(pd, 9, 2, default=0.0)
-                lng = _safe_get(pd, 9, 3, default=0.0)
-                rating_block = _safe_get(pd, 4, default=[])
-                rating = _safe_get(rating_block, 7, default=0.0) if isinstance(rating_block, list) else 0.0
-                review_count = _safe_get(rating_block, 8, default=0) if isinstance(rating_block, list) else 0
-                categories = _safe_get(pd, 13, default=[])
-                if not isinstance(categories, list):
-                    categories = []
-                address = _safe_get(pd, 18, default="") or ""
-                results.append({
-                    "place_id": place_id,
-                    "name": name,
-                    "lat": lat if isinstance(lat, (int, float)) else 0.0,
-                    "lng": lng if isinstance(lng, (int, float)) else 0.0,
-                    "rating": rating if isinstance(rating, (int, float)) else 0.0,
-                    "review_count": review_count if isinstance(review_count, int) else 0,
-                    "categories": categories,
-                    "address": address,
-                })
+                pd = _get(entity, 14)
+                if isinstance(pd, list) and len(pd) > 20:
+                    r = _extract(pd)
+                    if r:
+                        results.append(r)
 
+    # Coerce types
+    for r in results:
+        r["lat"] = float(r["lat"]) if isinstance(r["lat"], (int, float)) else 0.0
+        r["lng"] = float(r["lng"]) if isinstance(r["lng"], (int, float)) else 0.0
+        r["rating"] = float(r["rating"]) if isinstance(r["rating"], (int, float)) else 0.0
+        r["review_count"] = int(r["review_count"]) if isinstance(r["review_count"], (int, float)) else 0
     return results
 
 
 def parse_place_response(text):
+    """Parse place detail response into a Place dataclass."""
     text = _strip_xssi(text)
-
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         return None
 
     place = Place()
+    place.place_id = _find_place_id(data) or ""
 
-    info = _safe_get(data, 1, default=None)
+    info = _get(data, 1)
     if not isinstance(info, list) or len(info) < 50:
-        info = _safe_get(data, 6, default=[])
+        info = _get(data, 6, default=[])
 
-    # Place ID - usually at position that contains "0x..."
-    place_id = _find_place_id(data)
-    place.place_id = place_id or ""
-
-    # Address components (array of address lines)
-    addr_parts = _safe_get(info, 2, default=[])
+    # Address
+    addr_parts = _get(info, 2, default=[])
     if isinstance(addr_parts, list) and all(isinstance(a, str) for a in addr_parts):
         place.address_components = addr_parts
         place.address = ", ".join(addr_parts)
 
-    # Rating and review count
-    rating_block = _safe_get(info, 4, default=[])
-    if isinstance(rating_block, list):
-        place.rating = _safe_get(rating_block, 7, default=0.0)
-        place.review_count = _safe_get(rating_block, 8, default=0)
-        if not place.rating:
-            place.rating = _safe_get(rating_block, 0, 7, default=0.0)
+    # Rating + review count
+    rb = _get(info, 4, default=[])
+    if isinstance(rb, list):
+        place.rating = _get(rb, 7, default=0.0) or _get(rb, 0, 7, default=0.0)
+        place.review_count = _get(rb, 8, default=0) or _get(rb, 0, 8, default=0)
         if not place.review_count:
-            place.review_count = _safe_get(rating_block, 0, 8, default=0)
-        if not place.review_count:
-            review_link = _safe_get(rating_block, 3, default=None)
-            if isinstance(review_link, list):
-                review_text = _safe_get(review_link, 1, default="")
-                if isinstance(review_text, str) and "review" in review_text.lower():
-                    nums = re.findall(r"\d+", review_text.replace(",", ""))
+            rl = _get(rb, 3)
+            if isinstance(rl, list):
+                rt = _get(rl, 1, default="")
+                if isinstance(rt, str) and "review" in rt.lower():
+                    nums = re.findall(r"\d+", rt.replace(",", ""))
                     if nums:
                         place.review_count = int(nums[0])
 
     # Website
-    website_block = _safe_get(info, 7, default=None)
-    if isinstance(website_block, list) and len(website_block) > 0:
-        place.website = _safe_get(website_block, 0, default="")
-    elif isinstance(website_block, str):
-        place.website = website_block
+    wb = _get(info, 7)
+    if isinstance(wb, list) and wb:
+        place.website = _get(wb, 0, default="")
+    elif isinstance(wb, str):
+        place.website = wb
 
     # Coordinates
-    coord_block = _safe_get(info, 9, default=[])
-    if isinstance(coord_block, list) and len(coord_block) >= 4:
-        place.lat = _safe_get(coord_block, 2, default=0.0)
-        place.lng = _safe_get(coord_block, 3, default=0.0)
+    cb = _get(info, 9, default=[])
+    if isinstance(cb, list) and len(cb) >= 4:
+        place.lat = float(_get(cb, 2, default=0.0) or 0)
+        place.lng = float(_get(cb, 3, default=0.0) or 0)
 
     # Name
-    name = _safe_get(info, 11, default="")
+    name = _get(info, 11, default="")
     if isinstance(name, str) and name:
         place.name = name
 
     # Categories
-    categories = _safe_get(info, 13, default=[])
-    if isinstance(categories, list):
-        place.categories = [c for c in categories if isinstance(c, str)]
+    cats = _get(info, 13, default=[])
+    if isinstance(cats, list):
+        place.categories = [c for c in cats if isinstance(c, str)]
 
-    # Phone — directly at info[178][0][0], fallback to recursive search
-    phone_block = _safe_get(info, 178, default=None)
-    if isinstance(phone_block, list) and phone_block:
-        place.phone = _safe_get(phone_block, 0, 0, default="") or ""
+    # Phone
+    pb = _get(info, 178)
+    if isinstance(pb, list) and pb:
+        place.phone = _get(pb, 0, 0, default="") or ""
     if not place.phone:
         place.phone = _find_phone(info) or ""
 
-    # Opening hours — info[203][0][0] → list of [day, idx, date, [[hours_text, times]], ...]
-    hours_block = _safe_get(info, 203, default=None)
-    if isinstance(hours_block, list):
-        days_list = _safe_get(hours_block, 0, default=[])
-        if isinstance(days_list, list):
+    # Opening hours
+    hb = _get(info, 203)
+    if isinstance(hb, list):
+        days = _get(hb, 0, default=[])
+        if isinstance(days, list):
             oh = OpeningHours()
-            for day_entry in days_list:
-                if not isinstance(day_entry, list) or len(day_entry) < 4:
+            for de in days:
+                if not isinstance(de, list) or len(de) < 4:
                     continue
-                day_name = _safe_get(day_entry, 0, default="")
-                hours_slots = _safe_get(day_entry, 3, default=[])
-                if isinstance(hours_slots, list) and hours_slots:
-                    hours_text = _safe_get(hours_slots, 0, 0, default="")
-                    if isinstance(day_name, str) and isinstance(hours_text, str) and day_name:
-                        oh.periods.append({"day": day_name, "hours": hours_text})
-                        oh.weekday_text.append(f"{day_name}: {hours_text}")
+                dn = _get(de, 0, default="")
+                hs = _get(de, 3, default=[])
+                if isinstance(hs, list) and hs:
+                    ht = _get(hs, 0, 0, default="")
+                    if isinstance(dn, str) and isinstance(ht, str) and dn:
+                        oh.periods.append({"day": dn, "hours": ht})
+                        oh.weekday_text.append(f"{dn}: {ht}")
             if oh.periods:
                 place.opening_hours = oh
 
     # Photos
-    place.photos = _extract_photo_urls(data)
+    place.photos = _extract_photos(data)
 
-    # Price level: info[4][2] = "$$" style, info[4][10] = "£100 or above" style
-    price_level = _safe_get(info, 4, 2, default=None)
-    if not isinstance(price_level, str) or not price_level:
-        price_level = _safe_get(info, 4, 10, default=None)
-    if isinstance(price_level, str) and price_level:
-        place.price_level = price_level
+    # Price level
+    pl = _get(info, 4, 2)
+    if not isinstance(pl, str) or not pl:
+        pl = _get(info, 4, 10)
+    if isinstance(pl, str) and pl:
+        place.price_level = pl
 
-    # Description: editorial summary (restaurants) or hotel tagline fallback
-    description = _safe_get(info, 154, 0, 0, default=None)
-    if not isinstance(description, str) or not description:
-        # Hotels use info[32]: [0][1]=short tagline, [1][1]=medium description
-        description = _safe_get(info, 32, 1, 1, default=None) or _safe_get(info, 32, 0, 1, default=None)
-    if isinstance(description, str) and description:
-        place.description = description
+    # Description
+    desc = _get(info, 154, 0, 0)
+    if not isinstance(desc, str) or not desc:
+        desc = _get(info, 32, 1, 1) or _get(info, 32, 0, 1)
+    if isinstance(desc, str) and desc:
+        place.description = desc
 
-    # About: services/accessibility/dining (restaurants) + hotel amenity badges
+    # About + hotel badges
     place.about = _parse_about(info)
-    badges_raw = _safe_get(info, 64, 2, default=None)
-    if isinstance(badges_raw, list):
+    badges = _get(info, 64, 2)
+    if isinstance(badges, list):
         attrs = []
-        for badge in badges_raw:
-            label = _safe_get(badge, 2, default=None)
-            has_flag = _safe_get(badge, 3, default=0)
+        for badge in badges:
+            label = _get(badge, 2)
+            has = _get(badge, 3, default=0)
             if isinstance(label, str) and label:
-                attrs.append({"label": label, "present": has_flag == 1})
+                attrs.append({"label": label, "present": has == 1})
         if attrs:
             place.about.append({"group": "amenities", "attributes": attrs})
 
-    # Menu (restaurants only)
+    # Menu
     place.menu = _parse_menu(info)
 
-    # Booking / reservation links
-    booking_raw = _safe_get(info, 46, default=None)
-    if isinstance(booking_raw, list):
-        for entry in booking_raw:
-            url = _safe_get(entry, 0, default=None)
-            domain = _safe_get(entry, 1, default=None)
+    # Booking links
+    booking = _get(info, 46)
+    if isinstance(booking, list):
+        for entry in booking:
+            url = _get(entry, 0)
+            domain = _get(entry, 1)
             if isinstance(url, str) and url.startswith("http"):
                 place.booking_links.append({"url": url, "domain": domain or ""})
 
@@ -275,110 +344,89 @@ def parse_place_response(text):
 
 
 def parse_reviews_response(text):
+    """Parse reviews response. Returns (reviews, next_cursor)."""
     text = _strip_xssi(text)
-
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         return [], None
 
-    # data[1] = next page cursor (or None if last page)
-    next_cursor = _safe_get(data, 1, default=None)
-
-    # data[2] = list of review entries
-    review_entries = _safe_get(data, 2, default=[])
-    if not isinstance(review_entries, list):
+    next_cursor = _get(data, 1)
+    entries = _get(data, 2, default=[])
+    if not isinstance(entries, list):
         return [], next_cursor
 
     reviews = []
-    for entry in review_entries:
+    for entry in entries:
         if not isinstance(entry, list) or len(entry) < 2:
             continue
-
         review = _parse_single_review(entry)
         if review:
             reviews.append(review)
-
-    return reviews, next_cursor
+    return reviews, next_cursor if isinstance(next_cursor, str) else None
 
 
 def _parse_single_review(entry):
+    """Parse a single review entry."""
     review = Review()
-
-    # entry[0] is the inner review list
-    inner = _safe_get(entry, 0, default=[])
+    inner = _get(entry, 0, default=[])
     if not isinstance(inner, list) or len(inner) < 3:
         return None
 
-    # Review ID
-    review.review_id = _safe_get(inner, 0, default="")
+    review.review_id = _get(inner, 0, default="")
     if not isinstance(review.review_id, str):
         return None
 
-    # Metadata block (inner[1])
-    meta = _safe_get(inner, 1, default=[])
+    meta = _get(inner, 1, default=[])
     if isinstance(meta, list):
-        # Author info: meta[4][5] = [name, avatar, [profile_urls], user_id, None, guide_level, ...]
-        author_block = _safe_get(meta, 4, default=[])
-        author_info = _safe_get(author_block, 5, default=[])
+        # Author info path: meta[4][5] = [name, avatar, [profile_urls], user_id, None, guide_level, ...]
+        author_block = _get(meta, 4, default=[])
+        author_info = _get(author_block, 5, default=[])
         if isinstance(author_info, list) and len(author_info) > 3:
-            reviewer = Reviewer()
-            reviewer.name = _safe_get(author_info, 0, default="") or ""
-            reviewer.avatar_url = _safe_get(author_info, 1, default="") or ""
-            profile_urls = _safe_get(author_info, 2, default=[])
+            r = Reviewer()
+            r.name = _get(author_info, 0, default="") or ""
+            r.avatar_url = _get(author_info, 1, default="") or ""
+            profile_urls = _get(author_info, 2, default=[])
             if isinstance(profile_urls, list) and profile_urls:
-                reviewer.profile_url = profile_urls[0] if isinstance(profile_urls[0], str) else ""
-            reviewer.user_id = _safe_get(author_info, 3, default="") or ""
-
-            # Guide level at author_info[5] (>0 means local guide)
-            guide_level = _safe_get(author_info, 5, default=0)
-            reviewer.is_local_guide = isinstance(guide_level, int) and guide_level > 0
-
-            # Review count display text at author_info[10][0]
-            review_meta = _safe_get(author_info, 10, default=[])
+                r.profile_url = profile_urls[0] if isinstance(profile_urls[0], str) else ""
+            r.user_id = _get(author_info, 3, default="") or ""
+            guide_level = _get(author_info, 5, default=0)
+            r.is_local_guide = isinstance(guide_level, int) and guide_level > 0
+            review_meta = _get(author_info, 10, default=[])
             if isinstance(review_meta, list) and review_meta:
-                reviewer.review_count = _safe_get(review_meta, 0, default="") or ""
+                r.review_count = _get(review_meta, 0, default="") or ""
+            review.reviewer = r
 
-            review.reviewer = reviewer
+        review.date = _get(meta, 6, default="") or ""
 
-        # Date text: meta[6]
-        review.date = _safe_get(meta, 6, default="") or ""
-
-    # Content block (inner[2])
-    content = _safe_get(inner, 2, default=[])
+    content = _get(inner, 2, default=[])
     if isinstance(content, list):
-        # Rating: content[0] = [rating_int]
-        rating_arr = _safe_get(content, 0, default=[])
+        rating_arr = _get(content, 0, default=[])
         if isinstance(rating_arr, list) and rating_arr:
-            review.rating = int(_safe_get(rating_arr, 0, default=0) or 0)
+            review.rating = int(_get(rating_arr, 0, default=0) or 0)
 
-        # Language: content[14] = ["en"]
-        lang_arr = _safe_get(content, 14, default=[])
+        lang_arr = _get(content, 14, default=[])
         if isinstance(lang_arr, list) and lang_arr:
             review.language = lang_arr[0] if isinstance(lang_arr[0], str) else ""
 
-        # Review text: content[15] = [["full review text", None, [start, end]]]
-        text_blocks = _safe_get(content, 15, default=[])
+        text_blocks = _get(content, 15, default=[])
         if isinstance(text_blocks, list):
             for tb in text_blocks:
                 if isinstance(tb, list) and tb and isinstance(tb[0], str):
                     review.text = tb[0]
                     break
 
-        # Photos: content[2] = list of photo objects; URL at photo[1][6][0]
-        photo_entries = _safe_get(content, 2, default=[])
+        photo_entries = _get(content, 2, default=[])
         if isinstance(photo_entries, list):
             for photo in photo_entries:
-                url = _safe_get(photo, 1, 6, 0, default=None)
+                url = _get(photo, 1, 6, 0)
                 if isinstance(url, str) and url.startswith("http"):
                     review.photos.append(url)
-    reply = _safe_get(inner, 3, default=None)
-    if isinstance(reply, list) and len(reply) > 3:
-        # Reply date: reply[3]
-        review.owner_reply_date = _safe_get(reply, 3, default="") or ""
 
-        # Reply text: reply[14] = [["reply text", None, [start, end]]]
-        reply_text_blocks = _safe_get(reply, 14, default=[])
+    reply = _get(inner, 3)
+    if isinstance(reply, list) and len(reply) > 3:
+        review.owner_reply_date = _get(reply, 3, default="") or ""
+        reply_text_blocks = _get(reply, 14, default=[])
         if isinstance(reply_text_blocks, list):
             for tb in reply_text_blocks:
                 if isinstance(tb, list) and tb and isinstance(tb[0], str):
@@ -386,122 +434,3 @@ def _parse_single_review(entry):
                     break
 
     return review
-
-
-def _find_place_id(data):
-    pattern = re.compile(r"0x[0-9a-f]+:0x[0-9a-f]+")
-
-    def _search(obj, depth=0):
-        if depth > 5:
-            return None
-        if isinstance(obj, str):
-            match = pattern.search(obj)
-            if match:
-                return match.group(0)
-        elif isinstance(obj, list):
-            for item in obj[:20]:  # limit search breadth
-                result = _search(item, depth + 1)
-                if result:
-                    return result
-        return None
-
-    return _search(data)
-
-
-def _find_phone(data):
-    phone_pattern = re.compile(r"\+?\d[\d\s\-()]{7,}")
-
-    def _search(obj, depth=0):
-        if depth > 6:
-            return None
-        if isinstance(obj, str) and phone_pattern.match(obj) and len(obj) < 25:
-            return obj
-        elif isinstance(obj, list):
-            for item in obj[:30]:
-                result = _search(item, depth + 1)
-                if result:
-                    return result
-        return None
-
-    return _search(data)
-
-
-def _extract_photo_urls(data):
-    photos = []
-
-    def _search(obj, depth=0):
-        if depth > 8:
-            return
-        if isinstance(obj, str):
-            if "googleusercontent.com" in obj and obj.startswith("http"):
-                photos.append(obj)
-        elif isinstance(obj, list):
-            for item in obj[:50]:
-                _search(item, depth + 1)
-                if len(photos) >= 20:
-                    return
-
-    _search(data)
-    return list(dict.fromkeys(photos))[:20]
-
-
-def _parse_about(info):
-    # info[100][1] = [group, ...]  group: [uri, label, [attrs, ...]]
-    # attr: [uri, label, [1, [[present_int, ...]], ...]]
-    groups_raw = _safe_get(info, 100, 1, default=None)
-    if not isinstance(groups_raw, list):
-        return []
-
-    result = []
-    for group in groups_raw:
-        if not isinstance(group, list) or len(group) < 2:
-            continue
-        group_name = _safe_get(group, 0, default="") or ""
-        attrs_raw = _safe_get(group, 2, default=None)
-        if not isinstance(attrs_raw, list):
-            attrs_raw = _safe_get(group, 1, default=[]) or []
-        attrs = []
-        for attr in attrs_raw:
-            if not isinstance(attr, list):
-                continue
-            label = _safe_get(attr, 1, default=None)
-            if not isinstance(label, str) or not label:
-                continue
-            present = _safe_get(attr, 2, 2, 0, default=None)
-            attrs.append({"label": label, "present": present == 1})
-        if attrs:
-            result.append({"group": group_name, "attributes": attrs})
-
-    return result
-
-
-def _parse_menu(info):
-    # info[125][0][0][1] = sections; section[0][0]=name, section[1][0]=items
-    # item[0][0]=name, item[0][1]=desc, item[1][0]=price
-    sections = _safe_get(info, 125, 0, 0, 1, default=None)
-    if not isinstance(sections, list):
-        return []
-
-    result = []
-    for section in sections:
-        if not isinstance(section, list) or len(section) < 2:
-            continue
-        category = _safe_get(section, 0, 0, default="") or ""
-        items_raw = _safe_get(section, 1, 0, default=None)
-        if not isinstance(items_raw, list):
-            continue
-        items = []
-        for item in items_raw:
-            if not isinstance(item, list):
-                continue
-            name = _safe_get(item, 0, 0, default="") or ""
-            if not name:
-                continue
-            desc = _safe_get(item, 0, 1, default="") or ""
-            price = _safe_get(item, 1, 0, default="") or ""
-            photo_url = _safe_get(item, 5, 0, 0, default="") or ""
-            items.append({"name": name, "description": desc, "price": price, "photo": photo_url})
-        if items:
-            result.append({"category": category, "items": items})
-
-    return result
