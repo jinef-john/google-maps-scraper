@@ -1,26 +1,14 @@
-from urllib.parse import quote
+"""Google Maps internal endpoint URL builders."""
 
+from urllib.parse import quote
+import time
 
 BASE = "https://www.google.com"
 
 
 def search_url(query, lat, lng, zoom=13, lang="en", gl="us", page_size=20, start=0):
-    """Build the /search?tbm=map URL for listing places.
-
-    Args:
-        query: Search string (e.g. "hospitals in Nairobi")
-        lat: Center latitude
-        lng: Center longitude
-        zoom: Map zoom level (affects search radius)
-        lang: Language code
-        gl: Country code
-        page_size: Results per page (default 20)
-        start: Offset for pagination (0, 20, 40, ...)
-    """
-    # Calculate the map span based on zoom
-    # At zoom 13, span is roughly 0.1 degrees
     span = 360 / (2 ** zoom)
-    d_value = span * 111320  # approx meters
+    d_value = span * 111320
 
     pb = (
         f"!4m12!1m3!1d{d_value}!2d{lng}!3d{lat}"
@@ -69,21 +57,17 @@ def search_url(query, lat, lng, zoom=13, lang="en", gl="us", page_size=20, start
         "!67m5!7b1!10b1!14b1!15m1!1b0!69i775!77b1"
     )
 
-    encoded_query = quote(query)
     return (
         f"{BASE}/search?tbm=map&authuser=0&hl={lang}&gl={gl}"
-        f"&pb={pb}&q={encoded_query}&tch=1&ech=1&psi=dummy.{int(__import__('time').time()*1000)}.1"
+        f"&pb={pb}&q={quote(query)}&tch=1&ech=1&psi=dummy.{int(time.time()*1000)}.1"
     )
 
 
 def place_url(place_id, lat, lng, query="", lang="en", gl="us"):
-    """Build the /maps/preview/place URL for full place details."""
-    encoded_place_id = quote(place_id, safe="")
-    encoded_query = quote(query, safe="") if query else ""
-
+    enc_pid = quote(place_id, safe="")
     pb = (
         f"!1m6"
-        f"!1s{encoded_place_id}"
+        f"!1s{enc_pid}"
         f"!3m1!1d1000"
         f"!4m2!3d{lat}!4d{lng}"
         "!3m1!1e3"
@@ -98,34 +82,22 @@ def place_url(place_id, lat, lng, query="", lang="en", gl="us"):
         "!6m1!1e1!9b1!89b1!90m2!1m1!1e2!98m3!1b1!2b1!3b1"
         "!103b1!113b1!114m3!1b1!2m1!1b1!117b1!122m1!1b1!126b1!127b1!128m1!1b0"
     )
-
     url = f"{BASE}/maps/preview/place?authuser=0&hl={lang}&gl={gl}&pb={pb}"
-    if encoded_query:
-        url += f"&q={encoded_query}"
+    if query:
+        url += f"&q={quote(query, safe='')}"
     return url
 
 
 def reviews_url(place_id, page_size=10, cursor="", lang="en", gl="us"):
-    """Build the /maps/rpc/listugcposts URL for paginated reviews.
-
-    Args:
-        place_id: The hex place ID
-        page_size: Reviews per page (default 10)
-        cursor: Pagination cursor (empty string for first page)
-        lang: Language code
-        gl: Country code
-    """
-    encoded_place_id = quote(place_id, safe="")
-    encoded_cursor = quote(cursor, safe="") if cursor else ""
-
+    enc_pid = quote(place_id, safe="")
+    enc_cursor = quote(cursor, safe="") if cursor else ""
     pb = (
-        f"!1m6!1s{encoded_place_id}"
+        f"!1m6!1s{enc_pid}"
         "!6m4!4m1!1e1!4m1!1e3"
-        f"!2m2!1i{page_size}!2s{encoded_cursor}"
+        f"!2m2!1i{page_size}!2s{enc_cursor}"
         "!5m2!1sdummy!7e81"
         "!8m9!2b1!3b1!5b1!7b1!12m4!1b1!2b1!4m1!1e1"
         "!11m4!1e3!2e1!6m1!1i2"
         "!13m1!1e1"
     )
-
     return f"{BASE}/maps/rpc/listugcposts?authuser=0&hl={lang}&gl={gl}&pb={pb}"
