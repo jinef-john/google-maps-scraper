@@ -1,98 +1,131 @@
+"""CLI for gmaps-request."""
+
 import argparse
+import hashlib
 import logging
 import sys
+import time
 
 from db import Database
 from scraper import GoogleMapsScraper
 
 
-def _print_place_summary(place, index=None, reviews_saved=None):
-    prefix = f"[{index}] " if index is not None else ""
-    price = place.price_level or ""
-    cats = ", ".join(place.categories[:2])
-    menu_count = len(place.menu)
-    about_count = len(place.about)
+def _setup_logging(verbose):
+    level = logging.DEBUG if verbose else logging.INFO
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s" if verbose else "%(levelname)s: %(message)s"
+    logging.basicConfig(level=level, format=fmt, stream=sys.stderr)
 
-    print(f"{prefix}{place.name}")
-    print(f"  Rating:   {place.rating}/5  |  {place.review_count:,} reviews{('  |  ' + price) if price else ''}")
-    if cats:              print(f"  Category: {cats}")
-    if place.address:    print(f"  Address:  {place.address}")
-    if place.phone:      print(f"  Phone:    {place.phone}")
-    if place.website:    print(f"  Website:  {place.website[:70]}")
-    if place.description: print(f"  Desc:     {place.description[:100]}")
-    if menu_count:
-        menu_items = sum(len(s["items"]) for s in place.menu)
-        print(f"  Menu:     {menu_count} sections, {menu_items} items")
-    if about_count:      print(f"  About:    {about_count} attribute group(s)")
+
+def _print_place(place, index=None, reviews_saved=None):
+    prefix = f"[{index}] " if index else ""
+    cats = ", ".join(place.categories[:2])
+    print(f"\n{prefix}{place.name}")
+    print(f"  Rating:   {place.rating}/5  |  {place.review_count:,} reviews", end="")
+    if place.price_level:
+        print(f"  |  {place.price_level}", end="")
+    print()
+    if cats:
+        print(f"  Category: {cats}")
+    if place.address:
+        print(f"  Address:  {place.address}")
+    if place.phone:
+        print(f"  Phone:    {place.phone}")
+    if place.website:
+        print(f"  Website:  {place.website[:70]}")
+    if place.description:
+        print(f"  Desc:     {place.description[:100]}")
+    if place.menu:
+        items = sum(len(s["items"]) for s in place.menu)
+        print(f"  Menu:     {len(place.menu)} sections, {items} items")
+    if place.about:
+        print(f"  About:    {len(place.about)} attribute group(s)")
     if reviews_saved is not None:
         print(f"  Reviews:  {reviews_saved} saved")
-    print()
+
+
+def _progress_bar(done, total, width=40):
+    if total == 0:
+        return ""
+    filled = int(width * done / total)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"[{bar}] {done}/{total} ({100*done//total}%)"
+
+
+def _add_common_args(p):
+    p.add_argument("--proxy", help="Proxy URL (socks5://... or http://...)")
+    p.add_argument("--lang", default="en", help="Language code")
+    p.add_argument("--gl", default="us", help="Country code")
+    p.add_argument("--delay", type=float, default=1.5, help="Min delay between requests")
+    p.add_argument("--workers", type=int, default=4, help="Concurrent workers")
+    p.add_argument("--session-file", default="output/session.json", help="Session persistence file")
+    p.add_argument("--quiet", "-q", action="store_true")
+    p.add_argument("--verbose", "-v", action="store_true")
 
 
 def cmd_search(args):
-    with Database(args.db) as db, GoogleMapsScraper(proxy=args.proxy, lang=args.lang, gl=args.gl) as scraper:
-        if args.delay:
-            scraper.set_delay(args.delay, args.delay * 2)
+    _setup_logging(args.verbose)
+    db = Database(args.db)
+    job_id = args.job_id or hashlib.sha256(args.query.encode()).hexdigest()[:16]
 
-        results = scraper.search(
-            query=args.query, lat=args.lat, lng=args.lng,
-            zoom=args.zoom, max_results=args.max_places,
+    print(f"Search: {args.query}")
+    print(f"Job ID: {job_id}")
+    print(f"Workers: {args.workers}  |  Max places: {args.max_places}  |  Max reviews: {args.max_reviews}")
+    print("-" * 60)
+
+    start = time.time()
+    with GoogleMapsScraper(
+        proxy=args.proxy, lang=args.lang, gl=args.gl,
+        min_delay=args.delay, max_delay=args.delay * 2,
+        workers=args.workers, session_file=args.session_file,
+    ) as scraper:
+        def _cb(done, total):
+            if not args.quiet:
+                print(f"\r  {_progress_bar(done, total)}", end="", flush=True, file=sys.stderr)
+
+        stats = scraper.search_and_scrape(
+            db=db, query=args.query, lat=args.lat, lng=args.lng, zoom=args.zoom,
+            max_places=args.max_places, max_reviews=args.max_reviews,
+            job_id=job_id, progress_callback=_cb,
         )
 
-        for i, result in enumerate(results, 1):
-            place = scraper.get_place_details(
-                place_id=result["place_id"],
-                lat=result.get("lat", 0.0),
-                lng=result.get("lng", 0.0),
-                query=args.query,
-            )
-            if not place:
-                continue
-
-            db.upsert_place(place)
-            reviews_saved = 0
-            if args.max_reviews != 0:
-                for review in scraper.iter_reviews(result["place_id"], args.max_reviews):
-                    db.insert_review(result["place_id"], review)
-                    reviews_saved += 1
-                db.mark_reviews_fetched(result["place_id"])
-
-            if not args.quiet:
-                _print_place_summary(place, index=i, reviews_saved=reviews_saved)
-
-    print(f"Done. {len(results)} place(s) saved to {args.db}", file=sys.stderr)
+    if not args.quiet:
+        print(file=sys.stderr)
+    elapsed = time.time() - start
+    print(f"\nDone in {elapsed:.1f}s | Places: {stats['places_saved']}/{stats['places_found']} | Reviews: {stats['reviews_saved']} | Errors: {stats['errors']}")
+    print(f"Database: {args.db}")
 
 
 def cmd_place(args):
-    with Database(args.db) as db, GoogleMapsScraper(proxy=args.proxy, lang=args.lang, gl=args.gl) as scraper:
-        if args.delay:
-            scraper.set_delay(args.delay, args.delay * 2)
-
-        place = scraper.get_place_details(
-            place_id=args.place_id,
-            lat=args.lat,
-            lng=args.lng,
-        )
+    _setup_logging(args.verbose)
+    db = Database(args.db)
+    with GoogleMapsScraper(
+        proxy=args.proxy, lang=args.lang, gl=args.gl,
+        min_delay=args.delay, max_delay=args.delay * 2,
+        session_file=args.session_file,
+    ) as scraper:
+        place = scraper.get_place(args.place_id, lat=args.lat, lng=args.lng)
         if not place:
-            print("Failed to fetch place details.", file=sys.stderr)
+            print("Failed to fetch place.", file=sys.stderr)
             sys.exit(1)
 
         db.upsert_place(place)
         reviews_saved = 0
         if args.max_reviews != 0:
-            for review in scraper.iter_reviews(args.place_id, args.max_reviews):
+            for review in scraper.iter_reviews(args.place_id, max_reviews=args.max_reviews):
                 db.insert_review(args.place_id, review)
                 reviews_saved += 1
             db.mark_reviews_fetched(args.place_id)
 
-    _print_place_summary(place, reviews_saved=reviews_saved)
-    print(f"Saved to {args.db}", file=sys.stderr)
+    _print_place(place, reviews_saved=reviews_saved)
+    print(f"\nSaved to {args.db}")
 
 
 def cmd_list(args):
-    with GoogleMapsScraper(proxy=args.proxy, lang=args.lang, gl=args.gl) as scraper:
-        if args.delay:
-            scraper.set_delay(args.delay, args.delay * 2)
+    _setup_logging(args.verbose)
+    with GoogleMapsScraper(
+        proxy=args.proxy, lang=args.lang, gl=args.gl,
+        min_delay=args.delay, max_delay=args.delay * 2,
+    ) as scraper:
         results = scraper.search(
             query=args.query, lat=args.lat, lng=args.lng,
             zoom=args.zoom, max_results=args.max_places,
@@ -101,59 +134,117 @@ def cmd_list(args):
     for i, r in enumerate(results, 1):
         cats = ", ".join(r.get("categories", [])[:2])
         rating = r.get("rating") or ""
-        print(f"  [{i}] {r.get('name', '?')}"
-              f"{('  |  ' + str(rating) + '/5') if rating else ''}"
-              f"{('  |  ' + cats) if cats else ''}")
+        line = f"  [{i}] {r.get('name', '?')}"
+        if rating:
+            line += f"  |  {rating}/5"
+        if cats:
+            line += f"  |  {cats}"
+        print(line)
         print(f"       {r['place_id']}")
 
     print(f"\nFound {len(results)} place(s).", file=sys.stderr)
 
 
+def cmd_resume(args):
+    _setup_logging(args.verbose)
+    db = Database(args.db)
+    job = db.get_job(args.job_id)
+    if not job:
+        print(f"Job not found: {args.job_id}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Resuming job: {args.job_id}")
+    print(f"Query: {job.get('query', 'N/A')}")
+    print(f"Progress: {job.get('places_done', 0)}/{job.get('places_total', 0)} places")
+    print("-" * 60)
+
+    start = time.time()
+    with GoogleMapsScraper(
+        proxy=args.proxy, lang=args.lang, gl=args.gl,
+        min_delay=args.delay, max_delay=args.delay * 2,
+        workers=args.workers, session_file=args.session_file,
+    ) as scraper:
+        def _cb(done, total):
+            if not args.quiet:
+                print(f"\r  {_progress_bar(done, total)}", end="", flush=True, file=sys.stderr)
+
+        stats = scraper.resume_job(db, args.job_id, max_reviews=args.max_reviews, progress_callback=_cb)
+
+    if not args.quiet:
+        print(file=sys.stderr)
+    elapsed = time.time() - start
+    print(f"\nDone in {elapsed:.1f}s | Places: {stats['places_saved']}/{stats['places_found']} | Reviews: {stats['reviews_saved']} | Errors: {stats['errors']}")
+
+
+def cmd_stats(args):
+    _setup_logging(args.verbose)
+    db = Database(args.db)
+    stats = db.get_stats()
+    print(f"Database: {args.db}")
+    print(f"  Places:  {stats['places']}")
+    print(f"  Reviews: {stats['reviews']}")
+    print(f"  Pending: {stats['pending_reviews']} places need reviews")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Google Maps Scraper")
-    parser.add_argument("--proxy", help="Proxy URL (socks5://..., http://...)")
-    parser.add_argument("--lang", default="en", help="Language code (default: en)")
-    parser.add_argument("--gl", default="us", help="Country code (default: us)")
-    parser.add_argument("--delay", type=float, default=1.5,
-                        help="Min delay between requests in seconds (default: 1.5)")
-    parser.add_argument("--quiet", "-q", action="store_true")
-    parser.add_argument("--verbose", "-v", action="store_true")
+    parser = argparse.ArgumentParser(
+        prog="gmaps-request",
+        description="High-scale, request-based Google Maps data extraction.",
+    )
+    subs = parser.add_subparsers(dest="command", required=True)
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    sp = subs.add_parser("search", help="Search and scrape all results")
+    sp.add_argument("query")
+    sp.add_argument("--lat", type=float, default=0.0)
+    sp.add_argument("--lng", type=float, default=0.0)
+    sp.add_argument("--zoom", type=int, default=13)
+    sp.add_argument("--max-places", type=int, default=20)
+    sp.add_argument("--max-reviews", type=int, default=50, help="Max reviews per place (0=skip)")
+    sp.add_argument("--db", default="output/gmaps.db")
+    sp.add_argument("--job-id", help="Custom job ID for resume tracking")
+    _add_common_args(sp)
 
-    p_search = subparsers.add_parser("search", help="Search and scrape places")
-    p_search.add_argument("query")
-    p_search.add_argument("--lat", type=float, default=0.0)
-    p_search.add_argument("--lng", type=float, default=0.0)
-    p_search.add_argument("--zoom", type=int, default=13)
-    p_search.add_argument("--max-places", type=int, default=20)
-    p_search.add_argument("--max-reviews", type=int, default=50,
-                          help="Max reviews per place (0 = skip reviews, default: 50)")
-    p_search.add_argument("--db", default="output/gmaps.db", help="SQLite output (default: output/gmaps.db)")
+    pp = subs.add_parser("place", help="Scrape a single place by ID")
+    pp.add_argument("place_id")
+    pp.add_argument("--lat", type=float, default=0.0)
+    pp.add_argument("--lng", type=float, default=0.0)
+    pp.add_argument("--max-reviews", type=int, default=100)
+    pp.add_argument("--db", default="output/gmaps.db")
+    _add_common_args(pp)
 
-    p_place = subparsers.add_parser("place", help="Scrape a single place by ID")
-    p_place.add_argument("place_id")
-    p_place.add_argument("--lat", type=float, default=0.0)
-    p_place.add_argument("--lng", type=float, default=0.0)
-    p_place.add_argument("--max-reviews", type=int, default=100,
-                         help="Max reviews to fetch (0 = skip reviews, default: 100)")
-    p_place.add_argument("--db", default="output/gmaps.db", help="SQLite output (default: output/gmaps.db)")
+    lp = subs.add_parser("list", help="List places from search (no scrape)")
+    lp.add_argument("query")
+    lp.add_argument("--lat", type=float, default=0.0)
+    lp.add_argument("--lng", type=float, default=0.0)
+    lp.add_argument("--zoom", type=int, default=13)
+    lp.add_argument("--max-places", type=int, default=60)
+    lp.add_argument("--proxy", help="Proxy URL")
+    lp.add_argument("--lang", default="en")
+    lp.add_argument("--gl", default="us")
+    lp.add_argument("--delay", type=float, default=1.5)
+    lp.add_argument("--quiet", "-q", action="store_true")
+    lp.add_argument("--verbose", "-v", action="store_true")
 
-    p_list = subparsers.add_parser("list", help="Search and list places (no scraping)")
-    p_list.add_argument("query")
-    p_list.add_argument("--lat", type=float, default=0.0)
-    p_list.add_argument("--lng", type=float, default=0.0)
-    p_list.add_argument("--zoom", type=int, default=13)
-    p_list.add_argument("--max-places", type=int, default=60)
+    rp = subs.add_parser("resume", help="Resume an interrupted job")
+    rp.add_argument("job_id")
+    rp.add_argument("--max-reviews", type=int, default=50)
+    rp.add_argument("--db", default="output/gmaps.db")
+    _add_common_args(rp)
+
+    st = subs.add_parser("stats", help="Show database statistics")
+    st.add_argument("--db", default="output/gmaps.db")
+    st.add_argument("--quiet", "-q", action="store_true")
+    st.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
 
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
-    else:
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-    {"search": cmd_search, "place": cmd_place, "list": cmd_list}[args.command](args)
+    {
+        "search": cmd_search,
+        "place": cmd_place,
+        "list": cmd_list,
+        "resume": cmd_resume,
+        "stats": cmd_stats,
+    }[args.command](args)
 
 
 if __name__ == "__main__":
