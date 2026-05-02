@@ -426,7 +426,9 @@ class GoogleMapsScraper:
                 if reviews_saved % 50 == 0:
                     _print_info(f"  ... {reviews_saved} reviews scraped for {place.name}")
 
-            db.mark_reviews_fetched(place_id, rcursor, reviews_saved)
+            # Only mark as fetched if we got reviews or place has none
+            if reviews_saved > 0 or place.review_count == 0:
+                db.mark_reviews_fetched(place_id, rcursor, reviews_saved)
             cursor = rcursor
             _print_info(f"Total reviews saved for {place.name}: {reviews_saved}")
 
@@ -465,6 +467,7 @@ class GoogleMapsScraper:
         cursor = stub.get("cursor", "")
         if max_reviews != 0:
             rcursor = cursor
+            retries = 0
             while True:
                 rurl = reviews_url(pid, page_size=10, cursor=rcursor,
                                    lang=self.lang, gl=self.gl)
@@ -475,6 +478,21 @@ class GoogleMapsScraper:
                 if rresp.status_code != 200:
                     break
                 reviews, next_cursor = parse_reviews_response(rresp.text)
+
+                # If we got 0 reviews but the place is known to have reviews,
+                # the session may have expired. Refresh once and retry.
+                if not reviews and place.review_count > 0 and retries == 0:
+                    logger.warning("Reviews empty for %s (has %d reviews) — refreshing session...", pid, place.review_count)
+                    try:
+                        client.save()
+                        client.refresh()
+                        rresp = client.get(rurl)
+                        reviews, next_cursor = parse_reviews_response(rresp.text)
+                    except Exception as exc:
+                        logger.debug("Session refresh failed: %s", exc)
+                    retries += 1
+                    continue
+
                 for review in reviews:
                     db.insert_review(pid, review)
                     reviews_saved += 1
@@ -488,7 +506,11 @@ class GoogleMapsScraper:
                     break
                 rcursor = next_cursor
 
-            db.mark_reviews_fetched(pid, rcursor, reviews_saved)
+            # Only mark reviews as fetched if we actually got some, or if the
+            # place genuinely has no reviews. If review_count > 0 but we saved 0,
+            # the endpoint likely failed — leave it unfetched so resume can retry.
+            if reviews_saved > 0 or place.review_count == 0:
+                db.mark_reviews_fetched(pid, rcursor, reviews_saved)
             cursor = rcursor
 
         db.mark_job_place_done(job_id, pid, reviews_saved, cursor)
