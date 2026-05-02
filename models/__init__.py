@@ -79,12 +79,7 @@ class Place:
     social_links: list = field(default_factory=list)
     # Hotel / lodging
     hotel_class: str = ""
-    hotel_amenities: list = field(default_factory=list)
-    check_in: str = ""
-    check_out: str = ""
     # Status
-    permanently_closed: bool | None = None
-    temporarily_closed: bool | None = None
     business_status: str = ""
 
     def to_dict(self):
@@ -110,11 +105,6 @@ class Place:
             "booking_links": self.booking_links,
             "social_links": self.social_links,
             "hotel_class": self.hotel_class,
-            "hotel_amenities": self.hotel_amenities,
-            "check_in": self.check_in,
-            "check_out": self.check_out,
-            "permanently_closed": self.permanently_closed,
-            "temporarily_closed": self.temporarily_closed,
             "business_status": self.business_status,
             "photos": self.photos,
         }

@@ -481,26 +481,6 @@ def parse_place_response(text):
             if isinstance(star_text, str) and "star" in star_text.lower():
                 place.hotel_class = star_text
 
-    # Check-in / Check-out times
-    check_times = _get(info, 175, 1, default=[])
-    if isinstance(check_times, list):
-        for ct in check_times:
-            if isinstance(ct, list) and len(ct) >= 2:
-                label = _get(ct, 0, default="")
-                value = _get(ct, 1, default="")
-                if isinstance(label, str) and isinstance(value, str):
-                    if "check-in" in label.lower() or "check in" in label.lower():
-                        place.check_in = value
-                    elif "check-out" in label.lower() or "check out" in label.lower():
-                        place.check_out = value
-
-    # Hotel amenities from about or dedicated section
-    hotel_amenities_raw = _get(info, 175, 2, default=[])
-    if isinstance(hotel_amenities_raw, list):
-        for amenity in hotel_amenities_raw:
-            if isinstance(amenity, str) and amenity:
-                place.hotel_amenities.append(amenity)
-
     # Menu
     place.menu = _parse_menu(info)
 
@@ -516,14 +496,12 @@ def parse_place_response(text):
     # Social links
     place.social_links = _extract_social_links(data)
 
-    # Business status / permanently closed
+    # Business status
     status = _get(info, 34, 4, default="")
     if isinstance(status, str):
         if "permanently closed" in status.lower():
-            place.permanently_closed = True
             place.business_status = "CLOSED_PERMANENTLY"
         elif "temporarily closed" in status.lower():
-            place.temporarily_closed = True
             place.business_status = "CLOSED_TEMPORARILY"
         else:
             place.business_status = "OPERATIONAL"

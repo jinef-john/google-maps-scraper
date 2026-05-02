@@ -24,6 +24,7 @@ _MAPS_HEADERS = {
 _WARMUP_URLS = [
     "https://www.google.com",
     "https://www.google.com/maps",
+    "https://www.google.com/maps/place/Harvard+University/@42.3770029,-71.1188488,15z",
 ]
 
 
