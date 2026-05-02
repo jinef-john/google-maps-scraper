@@ -24,7 +24,7 @@
 
 ---
 
-A request-based scraper that extracts Google Maps place data and reviews without browser automation. Built on [httpcloak](https://github.com/httpcloak/httpcloak) for TLS fingerprinting and session persistence.
+A request-based scraper that extracts Google Maps place data and reviews without browser automation.
 
 **Key features:**
 
@@ -73,17 +73,17 @@ python main.py stats
 
 ## Options
 
-| Flag             | Description                                | Default               |
-| ---------------- | ------------------------------------------ | --------------------- |
-| `--db`           | SQLite database path                       | `output/gmaps.db`     |
-| `--max-places`   | Max places to scrape (`None` = unlimited)  | unlimited             |
-| `--max-reviews`  | Max reviews per place (`None` = all, `0` = skip) | unlimited       |
-| `--workers`      | Concurrent workers                         | 4                     |
-| `--delay`        | Min seconds between requests               | 2.5                   |
-| `--proxy`        | Proxy URL (`socks5://...` or `http://...`) | None                  |
-| `--session-file` | Session persistence path                   | `output/session.json` |
-| `--lang`         | Language code                              | `en`                  |
-| `--gl`           | Country/region code                        | `us`                  |
+| Flag             | Description                                      | Default               |
+| ---------------- | ------------------------------------------------ | --------------------- |
+| `--db`           | SQLite database path                             | `output/gmaps.db`     |
+| `--max-places`   | Max places to scrape (`None` = unlimited)        | unlimited             |
+| `--max-reviews`  | Max reviews per place (`None` = all, `0` = skip) | unlimited             |
+| `--workers`      | Concurrent workers                               | 4                     |
+| `--delay`        | Min seconds between requests                     | 2.5                   |
+| `--proxy`        | Proxy URL (`socks5://...` or `http://...`)       | None                  |
+| `--session-file` | Session persistence path                         | `output/session.json` |
+| `--lang`         | Language code                                    | `en`                  |
+| `--gl`           | Country/region code                              | `us`                  |
 
 ## Typical Workflows
 
