@@ -139,12 +139,38 @@ class Database:
                 "next_opening": place.opening_hours.next_opening,
             })
         self._conn().execute(
-            """INSERT OR REPLACE INTO places
+            """INSERT INTO places
                (place_id, name, address, address_components, plus_code, lat, lng, rating, review_count,
                 website, phone, email, fax, price_level, description, categories, primary_type, hours, photos,
                 about, menu, booking_links, social_links,
                 hotel_class, business_status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(place_id) DO UPDATE SET
+                name=excluded.name,
+                address=excluded.address,
+                address_components=excluded.address_components,
+                plus_code=excluded.plus_code,
+                lat=excluded.lat,
+                lng=excluded.lng,
+                rating=excluded.rating,
+                review_count=excluded.review_count,
+                website=excluded.website,
+                phone=excluded.phone,
+                email=excluded.email,
+                fax=excluded.fax,
+                price_level=excluded.price_level,
+                description=excluded.description,
+                categories=excluded.categories,
+                primary_type=excluded.primary_type,
+                hours=excluded.hours,
+                photos=excluded.photos,
+                about=excluded.about,
+                menu=excluded.menu,
+                booking_links=excluded.booking_links,
+                social_links=excluded.social_links,
+                hotel_class=excluded.hotel_class,
+                business_status=excluded.business_status,
+                scraped_at=datetime('now')""",
             (
                 place.place_id, place.name, place.address,
                 _to_json(place.address_components),
@@ -160,7 +186,6 @@ class Database:
                 _to_json(place.booking_links),
                 _to_json(place.social_links),
                 place.hotel_class,
-
                 place.business_status,
             ),
         )
@@ -248,6 +273,19 @@ class Database:
             (job_id,),
         ).fetchall()
         return [{"place_id": r[0], "cursor": r[1] or "", "name": r[2] or "", "total_saved": r[3] or 0} for r in rows]
+
+    def reopen_job_places_for_reviews(self, job_id, max_reviews):
+        """Reset 'done' places to 'pending' if they have fewer reviews than max_reviews."""
+        if max_reviews is None or max_reviews <= 0:
+            return
+        conn = self._conn()
+        c = conn.execute(
+            """UPDATE job_places SET status = 'pending'
+               WHERE job_id = ? AND status = 'done' AND reviews_count < ?""",
+            (job_id, max_reviews),
+        )
+        conn.commit()
+        return c.rowcount
 
     def get_job_place_cursor(self, job_id, place_id):
         row = self._conn().execute(
