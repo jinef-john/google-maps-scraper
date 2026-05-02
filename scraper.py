@@ -279,13 +279,17 @@ class GoogleMapsScraper:
             raise RuntimeError("Scraper not started")
 
         db.update_job_status(job_id, "running")
+        # Re-open done places if we now want more reviews than before
+        reopened = db.reopen_job_places_for_reviews(job_id, max_reviews)
+        if reopened:
+            _print_info(f"Re-opened {reopened} place(s) for more reviews")
         pending = db.get_pending_job_places(job_id)
         if not pending:
             db.update_job_status(job_id, "done")
             return {"places_found": 0, "places_saved": 0, "reviews_saved": 0,
                     "errors": 0, "message": "Nothing to resume"}
 
-        _print_info(f"Resuming job '{job_id}' with {len(pending)} pending place(s)...")
+        _print_info(f"Resuming job '{job_id}' with {len(pending)} pending place(s)..")
         stats = {"places_found": len(pending), "places_saved": 0,
                  "reviews_saved": 0, "errors": 0}
 
@@ -401,8 +405,22 @@ class GoogleMapsScraper:
         reviews_saved = 0
         cursor = ""
         if max_reviews != 0:
-            _print_info(f"Scraping reviews for: {place.name}")
-            rcursor = ""
+            # Resume from DB cursor if we already have reviews
+            existing = db.get_place_cursor(place_id)
+            rcursor = existing.get("cursor", "")
+            already_saved = existing.get("total_saved", 0)
+
+            if already_saved and max_reviews is not None:
+                remaining = max(0, max_reviews - already_saved)
+                if remaining == 0:
+                    _print_info(f"Already has {already_saved} reviews — skipping")
+                    return place, 0
+                target = remaining
+                _print_info(f"Scraping reviews for: {place.name} (resuming from {already_saved}, fetching up to {remaining} more)")
+            else:
+                target = max_reviews
+                _print_info(f"Scraping reviews for: {place.name}")
+
             while True:
                 rurl = reviews_url(place_id, page_size=10, cursor=rcursor,
                                    lang=self.lang, gl=self.gl)
@@ -416,21 +434,23 @@ class GoogleMapsScraper:
                 for review in reviews:
                     db.insert_review(place_id, review)
                     reviews_saved += 1
-                    if max_reviews is not None and reviews_saved >= max_reviews:
+                    if target is not None and reviews_saved >= target:
                         break
-                if max_reviews is not None and reviews_saved >= max_reviews:
+                if target is not None and reviews_saved >= target:
                     break
                 if not next_cursor or not reviews:
                     break
                 rcursor = next_cursor
-                if reviews_saved % 50 == 0:
-                    _print_info(f"  ... {reviews_saved} reviews scraped for {place.name}")
+                total_so_far = already_saved + reviews_saved
+                if total_so_far % 50 == 0:
+                    _print_info(f"  ... {total_so_far} reviews scraped for {place.name}")
 
+            total_reviews = already_saved + reviews_saved
             # Only mark as fetched if we got reviews or place has none
-            if reviews_saved > 0 or place.review_count == 0:
-                db.mark_reviews_fetched(place_id, rcursor, reviews_saved)
+            if total_reviews > 0 or place.review_count == 0:
+                db.mark_reviews_fetched(place_id, rcursor, total_reviews)
             cursor = rcursor
-            _print_info(f"Total reviews saved for {place.name}: {reviews_saved}")
+            _print_info(f"Total reviews saved for {place.name}: {total_reviews} (+{reviews_saved} new)")
 
         return place, reviews_saved
 
