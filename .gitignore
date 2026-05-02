@@ -13,3 +13,7 @@ build/
 *.json
 *.db*
 output/
+
+*/node_modules/*
+deobfuscator/
+gmaps-request
