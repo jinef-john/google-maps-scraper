@@ -60,6 +60,67 @@ def _find_phone(data):
     return _search(data)
 
 
+def _find_email(data):
+    """Extract email from nested data."""
+    email_pat = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+    def _search(obj, depth=0):
+        if depth > 7:
+            return None
+        if isinstance(obj, str):
+            m = email_pat.search(obj)
+            if m:
+                return m.group(0)
+            if obj.startswith("mailto:"):
+                return obj[7:]
+        if isinstance(obj, list):
+            for item in obj[:50]:
+                r = _search(item, depth + 1)
+                if r:
+                    return r
+        return None
+
+    return _search(data)
+
+
+def _extract_social_links(data):
+    """Extract social media links from nested data."""
+    socials = []
+    platforms = {
+        "facebook.com": "facebook",
+        "instagram.com": "instagram",
+        "twitter.com": "twitter",
+        "x.com": "twitter",
+        "linkedin.com": "linkedin",
+        "youtube.com": "youtube",
+        "tiktok.com": "tiktok",
+        "yelp.com": "yelp",
+        "tripadvisor.com": "tripadvisor",
+    }
+
+    def _search(obj, depth=0):
+        if depth > 7 or len(socials) >= 10:
+            return
+        if isinstance(obj, str) and obj.startswith("http"):
+            low = obj.lower()
+            for domain, name in platforms.items():
+                if domain in low:
+                    socials.append({"platform": name, "url": obj})
+                    break
+        elif isinstance(obj, list):
+            for item in obj[:60]:
+                _search(item, depth + 1)
+
+    _search(data)
+    seen = set()
+    result = []
+    for s in socials:
+        if s["url"] not in seen:
+            seen.add(s["url"])
+            result.append(s)
+    return result
+
+
 def _extract_photos(data, limit=20):
     photos = []
 
@@ -77,34 +138,73 @@ def _extract_photos(data, limit=20):
 
 
 def _parse_about(info):
-    groups_raw = _get(info, 100, 1)
-    if not isinstance(groups_raw, list):
+    about_data = _get(info, 100)
+    if not isinstance(about_data, list):
         return []
+
+    # Old format: about_data = [something, groups_raw, ...]
+    # New format: about_data = [group1, group2, ...]
+    groups_raw = _get(about_data, 1)
+    if not isinstance(groups_raw, list) or not groups_raw:
+        groups_raw = about_data
 
     result = []
     for group in groups_raw:
-        if not isinstance(group, list) or len(group) < 2:
+        if not isinstance(group, list):
             continue
-        gname = _get(group, 0, default="") or ""
-        attrs_raw = _get(group, 2)
-        if not isinstance(attrs_raw, list):
-            attrs_raw = _get(group, 1) or []
+
+        # Single-attribute wrapper: [[attr, ...]]
+        if len(group) == 1 and isinstance(group[0], list):
+            gname = ""
+            attrs_raw = group
+        # Named group with attrs: [id, name, attrs, ...] (new format)
+        elif len(group) >= 3 and isinstance(group[0], str) and isinstance(group[1], str) and isinstance(group[2], list):
+            gname = group[1]
+            attrs_raw = group[2]
+        # Named group: [name, something, attrs] (old format)
+        elif len(group) >= 2 and isinstance(group[0], str):
+            gname = group[0]
+            attrs_raw = _get(group, 2)
+            if not isinstance(attrs_raw, list):
+                attrs_raw = _get(group, 1) or []
+        else:
+            continue
+
         attrs = []
         for attr in attrs_raw if isinstance(attrs_raw, list) else []:
-            if not isinstance(attr, list):
+            if not isinstance(attr, list) or len(attr) < 3:
                 continue
             label = _get(attr, 1)
             if not isinstance(label, str) or not label:
                 continue
-            present = _get(attr, 2, 2, 0)
-            attrs.append({"label": label, "present": present == 1})
+            present_val = _get(attr, 2, 2, default=0)
+            if isinstance(present_val, list) and present_val:
+                present_val = present_val[0]
+            attrs.append({"label": label, "present": present_val == 1})
         if attrs:
             result.append({"group": gname, "attributes": attrs})
     return result
 
 
 def _parse_menu(info):
-    sections = _get(info, 125, 0, 0, 1)
+    menu_data = _get(info, 125)
+    if not isinstance(menu_data, list) or not menu_data:
+        return []
+
+    # Navigate to sections – structure varies between formats.
+    sections = None
+    candidates = [
+        _get(menu_data, 0, 0, 1),       # common path for old and new
+        _get(menu_data, 0, 1),          # old format fallback
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list) and candidate and isinstance(candidate[0], list):
+            # Heuristic: first element should look like a section
+            first = candidate[0]
+            if isinstance(first, list) and len(first) >= 2:
+                sections = candidate
+                break
+
     if not isinstance(sections, list):
         return []
 
@@ -112,23 +212,37 @@ def _parse_menu(info):
     for section in sections:
         if not isinstance(section, list) or len(section) < 2:
             continue
-        category = _get(section, 0, 0, default="") or ""
-        items_raw = _get(section, 1, 0)
-        if not isinstance(items_raw, list):
+
+        # New format: section = [["Category", ""], [items_wrapper]]
+        if isinstance(section[0], list) and len(section[0]) >= 1 and isinstance(section[0][0], str):
+            category = section[0][0]
+            items_wrapper = section[1] if len(section) > 1 else []
+        else:
+            category = _get(section, 0, 0, default="") or ""
+            items_wrapper = _get(section, 1, 0)
+
+        if not isinstance(items_wrapper, list):
             continue
+
+        # Unwrap singleton wrapper: [[items]] -> [items]
+        if len(items_wrapper) == 1 and isinstance(items_wrapper[0], list):
+            items_wrapper = items_wrapper[0]
+
         items = []
-        for item in items_raw:
+        for item in items_wrapper:
             if not isinstance(item, list):
                 continue
-            name = _get(item, 0, 0, default="") or ""
-            if not name:
-                continue
-            items.append({
-                "name": name,
-                "description": _get(item, 0, 1, default="") or "",
-                "price": _get(item, 1, 0, default="") or "",
-                "photo": _get(item, 5, 0, 0, default="") or "",
-            })
+            # New format: item = [[name, desc], [price]]
+            if len(item) == 2 and isinstance(item[0], list) and isinstance(item[1], list):
+                name = _get(item, 0, 0, default="") or ""
+                description = _get(item, 0, 1, default="") or ""
+                price = _get(item, 1, 0, default="") or ""
+            else:
+                name = _get(item, 0, 0, default="") or ""
+                description = _get(item, 0, 1, default="") or ""
+                price = _get(item, 1, 0, default="") or ""
+            if name:
+                items.append({"name": name, "description": description, "price": price})
         if items:
             result.append({"category": category, "items": items})
     return result
@@ -136,6 +250,9 @@ def _parse_menu(info):
 
 def parse_search_response(text):
     """Parse search results into place stubs."""
+    # Some responses are wrapped in {"c":N,"d":"..."} and end with JS comments.
+    text = text.split("/*")[0]
+
     try:
         decoder = json.JSONDecoder()
         outer, _ = decoder.raw_decode(text)
@@ -235,6 +352,11 @@ def parse_place_response(text):
         place.address_components = addr_parts
         place.address = ", ".join(addr_parts)
 
+    # Plus code
+    plus_code = _get(info, 2, 2, default="")
+    if isinstance(plus_code, str) and plus_code:
+        place.plus_code = plus_code
+
     # Rating + review count
     rb = _get(info, 4, default=[])
     if isinstance(rb, list):
@@ -252,7 +374,10 @@ def parse_place_response(text):
     # Website
     wb = _get(info, 7)
     if isinstance(wb, list) and wb:
-        place.website = _get(wb, 0, default="")
+        web_val = _get(wb, 0, default="")
+        if isinstance(web_val, list) and web_val:
+            web_val = _get(web_val, 0, default="")
+        place.website = web_val if isinstance(web_val, str) else ""
     elif isinstance(wb, str):
         place.website = wb
 
@@ -271,6 +396,8 @@ def parse_place_response(text):
     cats = _get(info, 13, default=[])
     if isinstance(cats, list):
         place.categories = [c for c in cats if isinstance(c, str)]
+        if place.categories:
+            place.primary_type = place.categories[0]
 
     # Phone
     pb = _get(info, 178)
@@ -278,6 +405,14 @@ def parse_place_response(text):
         place.phone = _get(pb, 0, 0, default="") or ""
     if not place.phone:
         place.phone = _find_phone(info) or ""
+
+    # Fax
+    fax = _get(info, 178, 0, 1, default="")
+    if isinstance(fax, str) and fax and "fax" in fax.lower():
+        place.fax = fax
+
+    # Email
+    place.email = _find_email(data) or _find_email(info) or ""
 
     # Opening hours
     hb = _get(info, 203)
@@ -297,6 +432,23 @@ def parse_place_response(text):
                         oh.weekday_text.append(f"{dn}: {ht}")
             if oh.periods:
                 place.opening_hours = oh
+        # Open now status (try a couple of common paths)
+        open_now = _get(hb, 3, default=None)
+        if isinstance(open_now, bool) and place.opening_hours:
+            place.opening_hours.open_now = open_now
+        elif isinstance(open_now, int) and place.opening_hours:
+            place.opening_hours.open_now = open_now == 1
+        if place.opening_hours is None:
+            open_now = _get(hb, 1, 3, default=None)
+            if isinstance(open_now, bool):
+                place.opening_hours = OpeningHours()
+                place.opening_hours.open_now = open_now
+            elif isinstance(open_now, int):
+                place.opening_hours = OpeningHours()
+                place.opening_hours.open_now = open_now == 1
+        next_opening = _get(hb, 4, 0, default="")
+        if isinstance(next_opening, str) and place.opening_hours:
+            place.opening_hours.next_opening = next_opening
 
     # Photos
     place.photos = _extract_photos(data)
@@ -315,18 +467,39 @@ def parse_place_response(text):
     if isinstance(desc, str) and desc:
         place.description = desc
 
-    # About + hotel badges
+    # About (generic – no boolean extraction into fixed columns)
     place.about = _parse_about(info)
-    badges = _get(info, 64, 2)
-    if isinstance(badges, list):
-        attrs = []
-        for badge in badges:
-            label = _get(badge, 2)
-            has = _get(badge, 3, default=0)
-            if isinstance(label, str) and label:
-                attrs.append({"label": label, "present": has == 1})
-        if attrs:
-            place.about.append({"group": "amenities", "attributes": attrs})
+
+    # Hotel class / star rating
+    hotel_class = _get(info, 4, 3, default="")
+    if isinstance(hotel_class, str) and hotel_class and ("star" in hotel_class.lower() or any(c.isdigit() for c in hotel_class)):
+        place.hotel_class = hotel_class
+    if not place.hotel_class:
+        hc = _get(info, 175, default=[])
+        if isinstance(hc, list) and len(hc) > 0:
+            star_text = _get(hc, 0, default="")
+            if isinstance(star_text, str) and "star" in star_text.lower():
+                place.hotel_class = star_text
+
+    # Check-in / Check-out times
+    check_times = _get(info, 175, 1, default=[])
+    if isinstance(check_times, list):
+        for ct in check_times:
+            if isinstance(ct, list) and len(ct) >= 2:
+                label = _get(ct, 0, default="")
+                value = _get(ct, 1, default="")
+                if isinstance(label, str) and isinstance(value, str):
+                    if "check-in" in label.lower() or "check in" in label.lower():
+                        place.check_in = value
+                    elif "check-out" in label.lower() or "check out" in label.lower():
+                        place.check_out = value
+
+    # Hotel amenities from about or dedicated section
+    hotel_amenities_raw = _get(info, 175, 2, default=[])
+    if isinstance(hotel_amenities_raw, list):
+        for amenity in hotel_amenities_raw:
+            if isinstance(amenity, str) and amenity:
+                place.hotel_amenities.append(amenity)
 
     # Menu
     place.menu = _parse_menu(info)
@@ -339,6 +512,26 @@ def parse_place_response(text):
             domain = _get(entry, 1)
             if isinstance(url, str) and url.startswith("http"):
                 place.booking_links.append({"url": url, "domain": domain or ""})
+
+    # Social links
+    place.social_links = _extract_social_links(data)
+
+    # Business status / permanently closed
+    status = _get(info, 34, 4, default="")
+    if isinstance(status, str):
+        if "permanently closed" in status.lower():
+            place.permanently_closed = True
+            place.business_status = "CLOSED_PERMANENTLY"
+        elif "temporarily closed" in status.lower():
+            place.temporarily_closed = True
+            place.business_status = "CLOSED_TEMPORARILY"
+        else:
+            place.business_status = "OPERATIONAL"
+
+    # Transit nearby
+    transit = _get(info, 126)
+    if isinstance(transit, list) and len(transit) > 0:
+        place.transit_nearby = True
 
     return place
 
@@ -354,7 +547,7 @@ def parse_reviews_response(text):
     next_cursor = _get(data, 1)
     entries = _get(data, 2, default=[])
     if not isinstance(entries, list):
-        return [], next_cursor
+        return [], next_cursor if next_cursor else None
 
     reviews = []
     for entry in entries:
@@ -363,7 +556,7 @@ def parse_reviews_response(text):
         review = _parse_single_review(entry)
         if review:
             reviews.append(review)
-    return reviews, next_cursor if isinstance(next_cursor, str) else None
+    return reviews, next_cursor if next_cursor else None
 
 
 def _parse_single_review(entry):
@@ -379,7 +572,6 @@ def _parse_single_review(entry):
 
     meta = _get(inner, 1, default=[])
     if isinstance(meta, list):
-        # Author info path: meta[4][5] = [name, avatar, [profile_urls], user_id, None, guide_level, ...]
         author_block = _get(meta, 4, default=[])
         author_info = _get(author_block, 5, default=[])
         if isinstance(author_info, list) and len(author_info) > 3:

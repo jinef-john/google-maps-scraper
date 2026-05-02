@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import sys
 import time
 from pathlib import Path
 
@@ -68,12 +69,16 @@ class Client:
         """Simulate a real user visiting Google Maps."""
         if self._warmup_done:
             return
+        sys.stderr.write("  -> Warming up session...")
+        sys.stderr.flush()
         for url in _WARMUP_URLS:
             try:
                 self._session.get(url)
             except Exception as exc:
                 logger.debug("Warmup failed for %s: %s", url, exc)
         self._warmup_done = True
+        sys.stderr.write(" done\n")
+        sys.stderr.flush()
         logger.debug("Warmup complete")
 
     def get(self, url, extra_headers=None):

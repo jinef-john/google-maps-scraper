@@ -2,6 +2,8 @@
 
 import hashlib
 import logging
+import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from helpers.client import Client
@@ -9,6 +11,12 @@ from helpers.endpoints import place_url, reviews_url, search_url
 from helpers.parsers import parse_place_response, parse_reviews_response, parse_search_response
 
 logger = logging.getLogger(__name__)
+
+
+def _print_info(msg):
+    """Print user-facing info to stderr (avoids mixing with stdout JSON)."""
+    sys.stderr.write(f"  -> {msg}\n")
+    sys.stderr.flush()
 
 
 class GoogleMapsScraper:
@@ -54,14 +62,15 @@ class GoogleMapsScraper:
 
     # --- Single-shot operations ---
 
-    def search(self, query, lat=0.0, lng=0.0, zoom=13, max_results=60):
+    def search(self, query, lat=0.0, lng=0.0, zoom=13, max_results=None,
+               progress_callback=None):
         """Search and return place stubs."""
         if not self._main_client:
             raise RuntimeError("Scraper not started")
         results = []
         page_size = 20
         start = 0
-        while len(results) < max_results:
+        while max_results is None or len(results) < max_results:
             url = search_url(query=query, lat=lat, lng=lng, zoom=zoom,
                              lang=self.lang, gl=self.gl, page_size=page_size, start=start)
             logger.info("Search: q=%r start=%d", query, start)
@@ -78,9 +87,11 @@ class GoogleMapsScraper:
                 break
             results.extend(batch)
             start += page_size
+            if progress_callback:
+                progress_callback(len(results), max_results if max_results is not None else len(results) + page_size)
             if len(batch) < page_size:
                 break
-        return results[:max_results]
+        return results[:max_results] if max_results is not None else results
 
     def get_place(self, place_id, lat=0.0, lng=0.0, query=""):
         """Fetch full details for a single place."""
@@ -119,15 +130,18 @@ class GoogleMapsScraper:
             return [], None
         return parse_reviews_response(resp.text)
 
-    def iter_reviews(self, place_id, max_reviews=0, cursor=""):
-        """Yield reviews with resumable cursor support."""
+    def iter_reviews(self, place_id, max_reviews=None, cursor=""):
+        """Yield reviews with resumable cursor support.
+        
+        If max_reviews is None, yields ALL reviews until exhausted.
+        """
         fetched = 0
         while True:
             reviews, next_cursor = self.get_reviews(place_id, cursor=cursor)
             for review in reviews:
                 yield review
                 fetched += 1
-                if max_reviews and fetched >= max_reviews:
+                if max_reviews is not None and fetched >= max_reviews:
                     return
             if not next_cursor or not reviews:
                 break
@@ -143,57 +157,110 @@ class GoogleMapsScraper:
     # --- Concurrent batch scraping with resume support ---
 
     def search_and_scrape(self, db, query, lat=0.0, lng=0.0, zoom=13,
-                          max_places=20, max_reviews=50, job_id=None,
-                          progress_callback=None):
-        """Search then concurrently scrape details + reviews for all results."""
+                          max_places=None, max_reviews=None, job_id=None,
+                          progress_callback=None,
+                          review_progress_callback=None):
+        """Search and concurrently scrape details + reviews as results arrive."""
         if not self._main_client:
             raise RuntimeError("Scraper not started")
 
         job_id = job_id or hashlib.sha256(query.encode()).hexdigest()[:16]
         db.create_job(job_id, query)
 
-        stubs = self.search(query, lat=lat, lng=lng, zoom=zoom, max_results=max_places)
-        if not stubs:
-            db.update_job_status(job_id, "done")
-            return {"places_found": 0, "places_saved": 0, "reviews_saved": 0, "errors": 0}
-
-        db.add_job_places(job_id, [s["place_id"] for s in stubs])
-
-        # Check for resumable pending places
-        pending = db.get_pending_job_places(job_id)
-        if not pending:
-            stats = db.get_stats()
-            db.update_job_status(job_id, "done")
-            return {"places_found": len(stubs), "places_saved": len(stubs),
-                    "reviews_saved": stats["reviews"], "errors": 0}
-
-        stats = {"places_found": len(stubs), "places_saved": 0,
-                 "reviews_saved": 0, "errors": 0}
+        _print_info(f"Searching places: '{query}'")
 
         # Create independent client instances for each worker
         clients = [self._new_client() for _ in range(self.workers)]
+        _print_info("Warming up workers...")
         for c in clients:
             c.warmup()
 
+        stats = {"places_found": 0, "places_saved": 0,
+                 "reviews_saved": 0, "errors": 0}
+        lock = threading.Lock()
+        futures = set()
+        client_idx = 0
+
+        def _submit_stub(stub):
+            nonlocal client_idx
+            cli = clients[client_idx % self.workers]
+            client_idx += 1
+            fut = exe.submit(self._scrape_one, cli, db, stub, max_reviews, job_id,
+                            review_progress_callback)
+            futures.add(fut)
+            return fut
+
+        def _drain_done():
+            done = [f for f in futures if f.done()]
+            for f in done:
+                futures.remove(f)
+                try:
+                    place, rc = f.result()
+                    with lock:
+                        stats["places_saved"] += 1 if place else 0
+                        stats["reviews_saved"] += rc
+                except Exception as exc:
+                    with lock:
+                        stats["errors"] += 1
+                    logger.error("Worker failed: %s", exc)
+
         try:
             with ThreadPoolExecutor(max_workers=self.workers) as exe:
-                futures = {}
-                for idx, stub in enumerate(stubs):
-                    cli = clients[idx % self.workers]
-                    fut = exe.submit(self._scrape_one, cli, db, stub, max_reviews, job_id)
-                    futures[fut] = stub
+                page_size = 20
+                start = 0
 
-                for fut in as_completed(futures):
-                    stub = futures[fut]
+                while True:
+                    url = search_url(query=query, lat=lat, lng=lng, zoom=zoom,
+                                     lang=self.lang, gl=self.gl, page_size=page_size, start=start)
+                    logger.info("Search: q=%r start=%d", query, start)
                     try:
-                        place, reviews_count = fut.result()
-                        stats["places_saved"] += 1 if place else 0
-                        stats["reviews_saved"] += reviews_count
+                        resp = self._main_client.get(url)
                     except Exception as exc:
-                        stats["errors"] += 1
-                        logger.error("Failed %s: %s", stub.get("place_id"), exc)
-                        db.mark_job_place_done(job_id, stub["place_id"], 0)
+                        logger.error("Search failed at start=%d: %s", start, exc)
+                        break
+                    if resp.status_code != 200:
+                        logger.warning("Search HTTP %d", resp.status_code)
+                        break
 
+                    batch = parse_search_response(resp.text)
+                    if not batch:
+                        break
+
+                    # Respect max_places limit
+                    remaining = max_places - stats["places_found"] if max_places is not None else len(batch)
+                    remaining = max(0, remaining)
+                    stubs_to_scrape = batch[:remaining]
+
+                    # Persist search stubs so they can be resumed
+                    db.add_job_places(job_id, [s["place_id"] for s in stubs_to_scrape])
+
+                    with lock:
+                        stats["places_found"] += len(stubs_to_scrape)
+
+                    for stub in stubs_to_scrape:
+                        _submit_stub(stub)
+                        _drain_done()
+
+                    if progress_callback:
+                        progress_callback(stats["places_saved"], stats["places_found"])
+
+                    start += page_size
+                    if len(batch) < page_size:
+                        break
+                    if max_places is not None and stats["places_found"] >= max_places:
+                        break
+
+                # Wait for remaining futures
+                for fut in as_completed(futures):
+                    try:
+                        place, rc = fut.result()
+                        with lock:
+                            stats["places_saved"] += 1 if place else 0
+                            stats["reviews_saved"] += rc
+                    except Exception as exc:
+                        with lock:
+                            stats["errors"] += 1
+                        logger.error("Worker failed: %s", exc)
                     if progress_callback:
                         progress_callback(stats["places_saved"], stats["places_found"])
 
@@ -204,7 +271,9 @@ class GoogleMapsScraper:
         db.update_job_status(job_id, "done")
         return stats
 
-    def resume_job(self, db, job_id, max_reviews=50, progress_callback=None):
+    def resume_job(self, db, job_id, max_reviews=None,
+                   place_progress_callback=None,
+                   review_progress_callback=None):
         """Resume an interrupted job."""
         if not self._main_client:
             raise RuntimeError("Scraper not started")
@@ -216,6 +285,7 @@ class GoogleMapsScraper:
             return {"places_found": 0, "places_saved": 0, "reviews_saved": 0,
                     "errors": 0, "message": "Nothing to resume"}
 
+        _print_info(f"Resuming job '{job_id}' with {len(pending)} pending place(s)...")
         stats = {"places_found": len(pending), "places_saved": 0,
                  "reviews_saved": 0, "errors": 0}
 
@@ -234,7 +304,8 @@ class GoogleMapsScraper:
                         "lat": 0.0, "lng": 0.0,
                         "cursor": item.get("cursor", ""),
                     }
-                    fut = exe.submit(self._scrape_one, cli, db, stub, max_reviews, job_id)
+                    fut = exe.submit(self._scrape_one, cli, db, stub, max_reviews, job_id,
+                                     review_progress_callback)
                     futures[fut] = stub
 
                 for fut in as_completed(futures):
@@ -248,8 +319,8 @@ class GoogleMapsScraper:
                         logger.error("Failed %s: %s", stub["place_id"], exc)
                         db.mark_job_place_done(job_id, stub["place_id"], 0)
 
-                    if progress_callback:
-                        progress_callback(stats["places_saved"], stats["places_found"])
+                    if place_progress_callback:
+                        place_progress_callback(stats["places_saved"], stats["places_found"])
 
         finally:
             for c in clients:
@@ -258,8 +329,9 @@ class GoogleMapsScraper:
         db.update_job_status(job_id, "done")
         return stats
 
-    def scrape_places(self, db, place_ids, max_reviews=50, job_id=None,
-                      progress_callback=None):
+    def scrape_places(self, db, place_ids, max_reviews=None, job_id=None,
+                      place_progress_callback=None,
+                      review_progress_callback=None):
         """Scrape details + reviews for known place IDs."""
         if not self._main_client:
             raise RuntimeError("Scraper not started")
@@ -287,7 +359,8 @@ class GoogleMapsScraper:
                         "lat": 0.0, "lng": 0.0,
                         "cursor": item.get("cursor", ""),
                     }
-                    fut = exe.submit(self._scrape_one, cli, db, stub, max_reviews, job_id)
+                    fut = exe.submit(self._scrape_one, cli, db, stub, max_reviews, job_id,
+                                     review_progress_callback)
                     futures[fut] = stub
 
                 for fut in as_completed(futures):
@@ -301,8 +374,8 @@ class GoogleMapsScraper:
                         logger.error("Failed %s: %s", stub["place_id"], exc)
                         db.mark_job_place_done(job_id, stub["place_id"], 0)
 
-                    if progress_callback:
-                        progress_callback(stats["places_saved"], stats["places_found"])
+                    if place_progress_callback:
+                        place_progress_callback(stats["places_saved"], stats["places_found"])
 
         finally:
             for c in clients:
@@ -311,11 +384,61 @@ class GoogleMapsScraper:
         db.update_job_status(job_id, "done")
         return stats
 
-    def _scrape_one(self, client, db, stub, max_reviews, job_id):
-        """Scrape a single place using the given client."""
+    def scrape_single_place(self, db, place_id, max_reviews=None, lat=0.0, lng=0.0, query=""):
+        """Scrape a single place with full details and reviews."""
+        if not self._main_client:
+            raise RuntimeError("Scraper not started")
+
+        _print_info(f"Fetching place details for {place_id[:30]}...")
+        place = self.get_place(place_id, lat=lat, lng=lng, query=query)
+        if not place:
+            _print_info(f"Failed to fetch place details for {place_id[:30]}")
+            return None, 0
+
+        db.upsert_place(place)
+        _print_info(f"Saved place: {place.name} ({place.rating}/5, {place.review_count:,} reviews)")
+
+        reviews_saved = 0
+        cursor = ""
+        if max_reviews != 0:
+            _print_info(f"Scraping reviews for: {place.name}")
+            rcursor = ""
+            while True:
+                rurl = reviews_url(place_id, page_size=10, cursor=rcursor,
+                                   lang=self.lang, gl=self.gl)
+                try:
+                    rresp = self._main_client.get(rurl)
+                except Exception:
+                    break
+                if rresp.status_code != 200:
+                    break
+                reviews, next_cursor = parse_reviews_response(rresp.text)
+                for review in reviews:
+                    db.insert_review(place_id, review)
+                    reviews_saved += 1
+                    if max_reviews is not None and reviews_saved >= max_reviews:
+                        break
+                if max_reviews is not None and reviews_saved >= max_reviews:
+                    break
+                if not next_cursor or not reviews:
+                    break
+                rcursor = next_cursor
+                if reviews_saved % 50 == 0:
+                    _print_info(f"  ... {reviews_saved} reviews scraped for {place.name}")
+
+            db.mark_reviews_fetched(place_id, rcursor, reviews_saved)
+            cursor = rcursor
+            _print_info(f"Total reviews saved for {place.name}: {reviews_saved}")
+
+        return place, reviews_saved
+
+    def _scrape_one(self, client, db, stub, max_reviews, job_id,
+                    review_progress_callback=None):
+        """Scrape a single place using the given client (internal, for workers)."""
         pid = stub["place_id"]
         lat = stub.get("lat", 0.0)
         lng = stub.get("lng", 0.0)
+        place_name = stub.get("name", "")
 
         url = place_url(pid, lat, lng, lang=self.lang, gl=self.gl)
         try:
@@ -355,15 +478,17 @@ class GoogleMapsScraper:
                 for review in reviews:
                     db.insert_review(pid, review)
                     reviews_saved += 1
-                    if max_reviews > 0 and reviews_saved >= max_reviews:
+                    if max_reviews is not None and reviews_saved >= max_reviews:
                         break
-                if max_reviews > 0 and reviews_saved >= max_reviews:
+                    if review_progress_callback:
+                        review_progress_callback(reviews_saved, max_reviews if max_reviews is not None else reviews_saved + 10, place_name)
+                if max_reviews is not None and reviews_saved >= max_reviews:
                     break
                 if not next_cursor or not reviews:
                     break
                 rcursor = next_cursor
 
-            db.mark_reviews_fetched(pid, rcursor)
+            db.mark_reviews_fetched(pid, rcursor, reviews_saved)
             cursor = rcursor
 
         db.mark_job_place_done(job_id, pid, reviews_saved, cursor)

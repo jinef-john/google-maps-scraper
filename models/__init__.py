@@ -48,6 +48,8 @@ class Review:
 class OpeningHours:
     periods: list = field(default_factory=list)
     weekday_text: list = field(default_factory=list)
+    open_now: bool | None = None
+    next_opening: str = ""
 
 
 @dataclass
@@ -56,13 +58,17 @@ class Place:
     name: str = ""
     address: str = ""
     address_components: list = field(default_factory=list)
+    plus_code: str = ""
     lat: float = 0.0
     lng: float = 0.0
     rating: float = 0.0
     review_count: int = 0
     categories: list = field(default_factory=list)
+    primary_type: str = ""
     website: str = ""
     phone: str = ""
+    email: str = ""
+    fax: str = ""
     opening_hours: OpeningHours | None = None
     photos: list = field(default_factory=list)
     price_level: str = ""
@@ -70,6 +76,16 @@ class Place:
     about: list = field(default_factory=list)
     menu: list = field(default_factory=list)
     booking_links: list = field(default_factory=list)
+    social_links: list = field(default_factory=list)
+    # Hotel / lodging
+    hotel_class: str = ""
+    hotel_amenities: list = field(default_factory=list)
+    check_in: str = ""
+    check_out: str = ""
+    # Status
+    permanently_closed: bool | None = None
+    temporarily_closed: bool | None = None
+    business_status: str = ""
 
     def to_dict(self):
         d = {
@@ -77,22 +93,36 @@ class Place:
             "name": self.name,
             "address": self.address,
             "address_components": self.address_components,
+            "plus_code": self.plus_code,
             "coordinates": {"lat": self.lat, "lng": self.lng},
             "rating": self.rating,
             "review_count": self.review_count,
             "categories": self.categories,
+            "primary_type": self.primary_type,
             "website": self.website,
             "phone": self.phone,
+            "email": self.email,
+            "fax": self.fax,
             "price_level": self.price_level,
             "description": self.description,
             "about": self.about,
             "menu": self.menu,
             "booking_links": self.booking_links,
+            "social_links": self.social_links,
+            "hotel_class": self.hotel_class,
+            "hotel_amenities": self.hotel_amenities,
+            "check_in": self.check_in,
+            "check_out": self.check_out,
+            "permanently_closed": self.permanently_closed,
+            "temporarily_closed": self.temporarily_closed,
+            "business_status": self.business_status,
             "photos": self.photos,
         }
         if self.opening_hours:
             d["opening_hours"] = {
                 "periods": self.opening_hours.periods,
                 "weekday_text": self.opening_hours.weekday_text,
+                "open_now": self.opening_hours.open_now,
+                "next_opening": self.opening_hours.next_opening,
             }
         return d
