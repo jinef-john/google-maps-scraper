@@ -79,7 +79,7 @@ def _add_common_args(p):
     p.add_argument("--proxy", help="Proxy URL (socks5://... or http://...)")
     p.add_argument("--lang", default="en", help="Language code")
     p.add_argument("--gl", default="us", help="Country code")
-    p.add_argument("--delay", type=float, default=1.5, help="Min delay between requests")
+    p.add_argument("--delay", type=float, default=2.5, help="Min delay between requests")
     p.add_argument("--workers", type=int, default=4, help="Concurrent workers")
     p.add_argument("--session-file", default="output/session.json", help="Session persistence file")
     p.add_argument("--quiet", "-q", action="store_true")
@@ -311,7 +311,7 @@ def main():
     lp.add_argument("--proxy", help="Proxy URL")
     lp.add_argument("--lang", default="en")
     lp.add_argument("--gl", default="us")
-    lp.add_argument("--delay", type=float, default=1.5)
+    lp.add_argument("--delay", type=float, default=2.5)
     lp.add_argument("--quiet", "-q", action="store_true")
     lp.add_argument("--verbose", "-v", action="store_true")
 
