@@ -11,5 +11,9 @@ build/
 .pytest_cache/
 *.log
 *.json
-*.db
+*.db*
 output/
+
+*/node_modules/*
+deobfuscator/
+gmaps-request
