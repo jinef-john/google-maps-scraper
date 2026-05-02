@@ -43,12 +43,7 @@ CREATE TABLE IF NOT EXISTS places (
     scraped_at          TEXT DEFAULT (datetime('now')),
     -- Hotel / lodging
     hotel_class         TEXT,
-    hotel_amenities     TEXT,
-    check_in            TEXT,
-    check_out           TEXT,
     -- Status
-    permanently_closed  INTEGER,
-    temporarily_closed  INTEGER,
     business_status     TEXT
 );
 
@@ -148,9 +143,8 @@ class Database:
                (place_id, name, address, address_components, plus_code, lat, lng, rating, review_count,
                 website, phone, email, fax, price_level, description, categories, primary_type, hours, photos,
                 about, menu, booking_links, social_links,
-                hotel_class, hotel_amenities, check_in, check_out,
-                permanently_closed, temporarily_closed, business_status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                hotel_class, business_status)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 place.place_id, place.name, place.address,
                 _to_json(place.address_components),
@@ -166,10 +160,7 @@ class Database:
                 _to_json(place.booking_links),
                 _to_json(place.social_links),
                 place.hotel_class,
-                _to_json(place.hotel_amenities),
-                place.check_in, place.check_out,
-                _bool_int(place.permanently_closed),
-                _bool_int(place.temporarily_closed),
+
                 place.business_status,
             ),
         )
