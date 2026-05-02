@@ -76,10 +76,10 @@ python main.py stats
 | Flag             | Description                                | Default               |
 | ---------------- | ------------------------------------------ | --------------------- |
 | `--db`           | SQLite database path                       | `output/gmaps.db`     |
-| `--max-places`   | Max places to scrape                       | 20                    |
-| `--max-reviews`  | Max reviews per place (`0` = skip)         | 50                    |
+| `--max-places`   | Max places to scrape (`None` = unlimited)  | unlimited             |
+| `--max-reviews`  | Max reviews per place (`None` = all, `0` = skip) | unlimited       |
 | `--workers`      | Concurrent workers                         | 4                     |
-| `--delay`        | Min seconds between requests               | 1.5                   |
+| `--delay`        | Min seconds between requests               | 2.5                   |
 | `--proxy`        | Proxy URL (`socks5://...` or `http://...`) | None                  |
 | `--session-file` | Session persistence path                   | `output/session.json` |
 | `--lang`         | Language code                              | `en`                  |
