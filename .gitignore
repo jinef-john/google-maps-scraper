@@ -16,4 +16,4 @@ output/
 
 */node_modules/*
 deobfuscator/
-gmaps-request
+gmaps-request*.har

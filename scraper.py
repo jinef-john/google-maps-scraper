@@ -2,16 +2,21 @@
 
 import hashlib
 import logging
+import random
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from helpers.client import Client
 from helpers.email_extractor import extract_emails
 from helpers.endpoints import place_url, reviews_batchexecute_request, search_url
-from helpers.parsers import parse_batchexecute_reviews_response, parse_place_response, parse_search_response
+from helpers.parsers import parse_place_response, parse_reviews_page, parse_search_response
 
 logger = logging.getLogger(__name__)
+
+# Attempts per review page before accepting a limited/empty result
+_REVIEW_PAGE_ATTEMPTS = 6
 
 
 def _print_info(msg):
@@ -112,7 +117,7 @@ class GoogleMapsScraper:
             logger.warning("Place HTTP %d", resp.status_code)
             return None
         place = parse_place_response(resp.text)
-        if place and not place.place_id:
+        if place:
             place.place_id = place_id
         return place
 
@@ -120,22 +125,55 @@ class GoogleMapsScraper:
         """Fetch one page of reviews. Returns (reviews, next_cursor)."""
         if not self._main_client:
             raise RuntimeError("Scraper not started")
-        ei, source_path = self._main_client.get_review_session(place_id, lat=lat, lng=lng, query=query)
-        if not ei:
-            logger.warning("Could not harvest review session for %s", place_id)
-            return [], None
-        url, body = reviews_batchexecute_request(place_id, ei, source_path, page_size=page_size,
-                                                  cursor=cursor, lang=self.lang)
-        logger.info("Reviews: %s cursor=%s", place_id, cursor[:20] if cursor else "start")
-        try:
-            resp = self._main_client.post(url, body)
-        except Exception as exc:
-            logger.error("Reviews failed %s: %s", place_id, exc)
-            return [], None
-        if resp.status_code != 200:
-            logger.warning("Reviews HTTP %d", resp.status_code)
-            return [], None
-        return parse_batchexecute_reviews_response(resp.text)
+        return self._fetch_review_page(self._main_client, place_id, cursor=cursor, lat=lat, lng=lng,
+                                       query=query, page_size=page_size)
+
+    def _fetch_review_page(self, client, place_id, cursor="", lat=0.0, lng=0.0, query="",
+                           page_size=10, expect_reviews=False):
+        """Fetch one page of reviews. Returns (reviews, next_cursor).
+
+        Retries with a re-harvested ei token when the page comes back empty but
+        the place should have reviews, and with a brand-new session when Google
+        serves its signed-out "limited view" (a few reviews, no cursor).
+        """
+        best = ([], None)
+        for attempt in range(_REVIEW_PAGE_ATTEMPTS):
+            ei, source_path = client.get_review_session(
+                place_id, lat=lat, lng=lng, query=query, force=attempt > 0)
+            if not ei:
+                logger.warning("Could not harvest review session for %s", place_id)
+                client.reset()
+                continue
+            url, body = reviews_batchexecute_request(place_id, ei, source_path, page_size=page_size,
+                                                      cursor=cursor, lang=self.lang)
+            logger.info("Reviews: %s cursor=%s", place_id, cursor[:20] if cursor else "start")
+            try:
+                resp = client.post(url, body)
+            except Exception as exc:
+                logger.error("Reviews failed %s: %s", place_id, exc)
+                continue
+            if resp.status_code != 200:
+                logger.warning("Reviews HTTP %d", resp.status_code)
+                continue
+
+            reviews, next_cursor, limited = parse_reviews_page(resp.text)
+            if limited:
+                # Limited view ignores the cursor, so only its first page is usable
+                if not cursor and len(reviews) > len(best[0]):
+                    best = (reviews, None)
+                logger.info("Limited review view for %s — starting a fresh session (attempt %d/%d)",
+                            place_id, attempt + 1, _REVIEW_PAGE_ATTEMPTS)
+                client.reset()
+                # Limited view shows up more under bursts; back off before the next session
+                time.sleep(min(2 * (attempt + 1), 8) + random.random())
+                continue
+            if reviews or not expect_reviews:
+                return reviews, next_cursor
+            logger.warning("Reviews empty for %s — refreshing review session...", place_id)
+
+        if best[0]:
+            logger.warning("Google kept serving limited reviews for %s; saving %d", place_id, len(best[0]))
+        return best
 
     def iter_reviews(self, place_id, max_reviews=None, cursor="", lat=0.0, lng=0.0, query=""):
         """Yield reviews with resumable cursor support.
@@ -395,6 +433,18 @@ class GoogleMapsScraper:
         db.update_job_status(job_id, "done")
         return stats
 
+    def _save_featured_reviews(self, db, place_id, place, max_reviews):
+        """Fall back to the snippets / partner reviews embedded in the place page."""
+        featured = place.featured_reviews
+        if max_reviews is not None:
+            featured = featured[:max_reviews]
+        for review in featured:
+            db.insert_review(place_id, review)
+        if featured:
+            logger.info("Reviews endpoint returned nothing for %s; saved %d featured reviews",
+                        place_id, len(featured))
+        return len(featured)
+
     def _maybe_extract_email(self, client, place):
         """Fetch the place's website and extract an email if we don't have one."""
         if not self.extract_emails:
@@ -442,18 +492,10 @@ class GoogleMapsScraper:
                 target = max_reviews
                 _print_info(f"Scraping reviews for: {place.name}")
 
-            ei, source_path = self._main_client.get_review_session(
-                place_id, lat=lat, lng=lng, query=query or place.name)
-            while ei:
-                rurl, rbody = reviews_batchexecute_request(
-                    place_id, ei, source_path, page_size=10, cursor=rcursor, lang=self.lang)
-                try:
-                    rresp = self._main_client.post(rurl, rbody)
-                except Exception:
-                    break
-                if rresp.status_code != 200:
-                    break
-                reviews, next_cursor = parse_batchexecute_reviews_response(rresp.text)
+            while True:
+                reviews, next_cursor = self._fetch_review_page(
+                    self._main_client, place_id, cursor=rcursor, lat=lat, lng=lng,
+                    query=query or place.name, expect_reviews=place.review_count > 0)
                 for review in reviews:
                     db.insert_review(place_id, review)
                     reviews_saved += 1
@@ -467,6 +509,9 @@ class GoogleMapsScraper:
                 total_so_far = already_saved + reviews_saved
                 if total_so_far % 50 == 0:
                     _print_info(f"  ... {total_so_far} reviews scraped for {place.name}")
+
+            if already_saved + reviews_saved == 0 and place.featured_reviews:
+                reviews_saved = self._save_featured_reviews(db, place_id, place, target)
 
             total_reviews = already_saved + reviews_saved
             # Only mark as fetched if we got reviews or place has none
@@ -501,8 +546,7 @@ class GoogleMapsScraper:
         if not place:
             db.mark_job_place_done(job_id, pid, 0)
             return None, 0
-        if not place.place_id:
-            place.place_id = pid
+        place.place_id = pid
 
         self._maybe_extract_email(client, place)
         db.upsert_place(place)
@@ -511,35 +555,10 @@ class GoogleMapsScraper:
         cursor = stub.get("cursor", "")
         if max_reviews != 0:
             rcursor = cursor
-            retries = 0
-            ei, source_path = client.get_review_session(
-                pid, lat=lat, lng=lng, query=place_name or place.name)
-            while ei:
-                rurl, rbody = reviews_batchexecute_request(
-                    pid, ei, source_path, page_size=10, cursor=rcursor, lang=self.lang)
-                try:
-                    rresp = client.post(rurl, rbody)
-                except Exception:
-                    break
-                if rresp.status_code != 200:
-                    break
-                reviews, next_cursor = parse_batchexecute_reviews_response(rresp.text)
-
-                # If we got 0 reviews but the place is known to have reviews,
-                # the review session (ei) may be stale. Re-harvest and retry once.
-                if not reviews and place.review_count > 0 and retries == 0:
-                    logger.warning("Reviews empty for %s (has %d reviews) — refreshing review session...", pid, place.review_count)
-                    try:
-                        ei, source_path = client.get_review_session(
-                            pid, lat=lat, lng=lng, query=place_name or place.name, force=True)
-                        rurl, rbody = reviews_batchexecute_request(
-                            pid, ei, source_path, page_size=10, cursor=rcursor, lang=self.lang)
-                        rresp = client.post(rurl, rbody)
-                        reviews, next_cursor = parse_batchexecute_reviews_response(rresp.text)
-                    except Exception as exc:
-                        logger.debug("Session refresh failed: %s", exc)
-                    retries += 1
-                    continue
+            while True:
+                reviews, next_cursor = self._fetch_review_page(
+                    client, pid, cursor=rcursor, lat=lat, lng=lng, query=place_name or place.name,
+                    expect_reviews=place.review_count > 0)
 
                 for review in reviews:
                     db.insert_review(pid, review)
@@ -553,6 +572,9 @@ class GoogleMapsScraper:
                 if not next_cursor or not reviews:
                     break
                 rcursor = next_cursor
+
+            if reviews_saved == 0 and place.featured_reviews:
+                reviews_saved = self._save_featured_reviews(db, pid, place, max_reviews)
 
             # Only mark reviews as fetched if we actually got some, or if the
             # place genuinely has no reviews. If review_count > 0 but we saved 0,
