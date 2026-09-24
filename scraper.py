@@ -2,8 +2,10 @@
 
 import hashlib
 import logging
+import random
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from helpers.client import Client
@@ -14,7 +16,7 @@ from helpers.parsers import parse_place_response, parse_reviews_page, parse_sear
 logger = logging.getLogger(__name__)
 
 # Attempts per review page before accepting a limited/empty result
-_REVIEW_PAGE_ATTEMPTS = 4
+_REVIEW_PAGE_ATTEMPTS = 6
 
 
 def _print_info(msg):
@@ -162,6 +164,8 @@ class GoogleMapsScraper:
                 logger.info("Limited review view for %s — starting a fresh session (attempt %d/%d)",
                             place_id, attempt + 1, _REVIEW_PAGE_ATTEMPTS)
                 client.reset()
+                # Limited view shows up more under bursts; back off before the next session
+                time.sleep(min(2 * (attempt + 1), 8) + random.random())
                 continue
             if reviews or not expect_reviews:
                 return reviews, next_cursor
