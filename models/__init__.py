@@ -16,7 +16,7 @@ class Reviewer:
 @dataclass
 class Review:
     reviewer: Reviewer = field(default_factory=Reviewer)
-    rating: int = 0
+    rating: float = 0
     text: str = ""
     date: str = ""
     language: str = ""
@@ -24,6 +24,7 @@ class Review:
     owner_reply: str = ""
     owner_reply_date: str = ""
     review_id: str = ""
+    source: str = ""
 
     def to_dict(self):
         return {
@@ -41,6 +42,7 @@ class Review:
             "photos": self.photos,
             "owner_reply": self.owner_reply,
             "owner_reply_date": self.owner_reply_date,
+            "source": self.source,
         }
 
 
@@ -81,6 +83,9 @@ class Place:
     hotel_class: str = ""
     # Status
     business_status: str = ""
+    # Review snippets / partner reviews embedded in the place page. Used when
+    # the reviews endpoint returns nothing (e.g. signed-out US places).
+    featured_reviews: list = field(default_factory=list)
 
     def to_dict(self):
         d = {

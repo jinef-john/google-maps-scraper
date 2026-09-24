@@ -1,5 +1,6 @@
 """Response parsers for Google Maps search, place details, and reviews."""
 
+import hashlib
 import json
 import re
 
@@ -340,11 +341,14 @@ def parse_place_response(text):
         return None
 
     place = Place()
-    place.place_id = _find_place_id(data) or ""
 
     info = _get(data, 1)
     if not isinstance(info, list) or len(info) < 50:
         info = _get(data, 6, default=[])
+
+    # info[10] is the place's own id; a blind scan can hit a neighbourhood id first
+    pid = _get(info, 10)
+    place.place_id = pid if isinstance(pid, str) and pid.startswith("0x") else (_find_place_id(data) or "")
 
     # Address
     addr_parts = _get(info, 2, default=[])
@@ -450,6 +454,8 @@ def parse_place_response(text):
         if isinstance(next_opening, str) and place.opening_hours:
             place.opening_hours.next_opening = next_opening
 
+    place.featured_reviews = _parse_review_snippets(info) + _parse_partner_reviews(info)
+
     # Photos
     place.photos = _extract_photos(data)
 
@@ -514,6 +520,57 @@ def parse_place_response(text):
     return place
 
 
+def _parse_review_snippets(info):
+    """Short "top review" quotes shown on the place page (info[31][1])."""
+    reviews = []
+    for entry in _get(info, 31, 1, default=[]) or []:
+        review_id = _get(entry, 10)
+        quote = _get(entry, 1)
+        if not isinstance(review_id, str) or not isinstance(quote, str):
+            continue
+        review = Review(review_id=review_id, text=quote.strip().strip('"'), source="Google snippet")
+        rating = _get(entry, 9)
+        if isinstance(rating, int):
+            review.rating = rating
+        review.reviewer.profile_url = _get(entry, 0, 0, default="") or ""
+        avatar = _get(entry, 0, 2, default="") or ""
+        review.reviewer.avatar_url = "https:" + avatar if avatar.startswith("//") else avatar
+        review.reviewer.user_id = _get(entry, 8, default="") or ""
+        reviews.append(review)
+    return reviews
+
+
+def _parse_partner_reviews(info):
+    """Featured Tripadvisor / Trip.com / ... reviews (info[175][12]); not always present."""
+    reviews = []
+    for block in _get(info, 175, 12, default=[]) or []:
+        source = _get(block, 1, 0, 1, default="") or ""
+        scale = _get(block, 1, 2)
+        for entry in _get(block, 0, default=[]) or []:
+            url = _get(entry, 0, default="") or ""
+            text = _get(entry, 3, default="") or ""
+            if not text:
+                continue
+            ts = _get(entry, 7, default="")
+            review = Review(
+                review_id="partner:" + hashlib.sha1(f"{source}|{url}|{ts}|{text}".encode()).hexdigest()[:24],
+                text=text,
+                date=_get(entry, 1, default="") or "",
+                source=source,
+            )
+            review.reviewer.name = _get(entry, 2, default="") or ""
+            review.reviewer.profile_url = url
+            try:
+                score = float(_get(entry, 6, default=0) or 0)
+            except (TypeError, ValueError):
+                score = 0
+            review.rating = score
+            if isinstance(scale, (int, float)) and scale not in (0, 5):
+                review.source = f"{source} (out of {scale})"
+            reviews.append(review)
+    return reviews
+
+
 def _reviews_from_data(data):
     if not isinstance(data, list):
         return [], None
@@ -525,12 +582,17 @@ def _reviews_from_data(data):
 
     reviews = []
     for entry in entries:
-        if not isinstance(entry, list) or len(entry) < 2:
+        if not isinstance(entry, list) or not entry:
             continue
         review = _parse_single_review(entry)
         if review:
             reviews.append(review)
     return reviews, next_cursor if next_cursor else None
+
+
+# The frame echoes whichever name the request used: the rpcid (as the web app
+# sends it) or the full service method name.
+_REVIEWS_RPC_NAMES = ("qv9Egd", "/MapsUgcPostService.ListUgcPosts")
 
 
 def _iter_batchexecute_chunks(text):
@@ -551,6 +613,17 @@ def parse_batchexecute_reviews_response(text):
     """
     Returns (reviews, next_cursor).
     """
+    reviews, next_cursor, _ = parse_reviews_page(text)
+    return reviews, next_cursor
+
+
+def parse_reviews_page(text):
+    """
+    Returns (reviews, next_cursor, limited).
+
+    limited is True when Google served its signed-out "limited view": a
+    handful of reviews and no cursor, regardless of the requested page.
+    """
     for chunk in _iter_batchexecute_chunks(text):
         try:
             frames = json.loads(chunk)
@@ -562,17 +635,19 @@ def parse_batchexecute_reviews_response(text):
             if (
                 isinstance(frame, list) and len(frame) > 2
                 and frame[0] == "wrb.fr"
-                and frame[1] == "/MapsUgcPostService.ListUgcPosts"
+                and frame[1] in _REVIEWS_RPC_NAMES
             ):
                 payload = frame[2]
                 if not payload:
-                    return [], None
+                    return [], None, False
                 try:
                     data = json.loads(payload)
                 except json.JSONDecodeError:
-                    return [], None
-                return _reviews_from_data(data)
-    return [], None
+                    return [], None, False
+                reviews, next_cursor = _reviews_from_data(data)
+                limited = _get(data, 6, 0) is True
+                return reviews, next_cursor, limited
+    return [], None, False
 
 
 def _parse_single_review(entry):
@@ -606,12 +681,18 @@ def _parse_single_review(entry):
             review.reviewer = r
 
         review.date = _get(meta, 6, default="") or ""
+        review.source = _get(meta, 13, 0, default="") or ""
 
     content = _get(inner, 2, default=[])
     if isinstance(content, list):
         rating_arr = _get(content, 0, default=[])
         if isinstance(rating_arr, list) and rating_arr:
             review.rating = int(_get(rating_arr, 0, default=0) or 0)
+        else:
+            # Partner reviews (Tripadvisor, Trip.com, ...): [None, 4.7, "4.7/5"]
+            score = _get(content, 8, 1)
+            if isinstance(score, (int, float)):
+                review.rating = score
 
         lang_arr = _get(content, 14, default=[])
         if isinstance(lang_arr, list) and lang_arr:

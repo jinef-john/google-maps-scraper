@@ -63,13 +63,17 @@ class Client:
         self._review_sessions = {}
         self._build_session()
 
-    def _build_session(self):
+    def _session_kwargs(self):
         kwargs = {
             "preset": "chrome-146-windows",
             "timeout": self._timeout,
         }
         if self._proxy:
             kwargs["proxy"] = self._proxy
+        return kwargs
+
+    def _build_session(self):
+        kwargs = self._session_kwargs()
 
         if self._session_file and os.path.exists(self._session_file):
             try:
@@ -188,6 +192,17 @@ class Client:
         """Reset connections, keep TLS cache"""
         self._session.refresh()
         logger.debug("Session refreshed")
+
+    def reset(self):
+        """Start over with a brand-new session (fresh cookies) and re-warm on next request."""
+        try:
+            self._session.close()
+        except Exception:
+            pass
+        self._session = httpcloak.Session(**self._session_kwargs())
+        self._warmup_done = False
+        self._review_sessions.clear()
+        logger.debug("Session reset")
 
     def save(self):
         """Persist session for 0-RTT resumption."""

@@ -108,7 +108,7 @@ def reviews_batchexecute_request(place_id, ei, source_path, page_size=10, cursor
     ], separators=(",", ":"))
 
     freq = json.dumps(
-        [[["/MapsUgcPostService.ListUgcPosts", inner, None, "generic"]]],
+        [[["qv9Egd", inner, None, "generic"]]],
         separators=(",", ":"),
     )
     body = "f.req=" + quote(freq)

@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     photos                  TEXT,
     owner_reply             TEXT,
     owner_reply_date        TEXT,
+    source                  TEXT DEFAULT '',
     scraped_at              TEXT DEFAULT (datetime('now'))
 );
 
@@ -126,6 +127,10 @@ class Database:
     def _init_db(self):
         conn = sqlite3.connect(self.path)
         conn.executescript(_INIT_SQL)
+        # Databases created before the source column existed
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(reviews)")}
+        if "source" not in cols:
+            conn.execute("ALTER TABLE reviews ADD COLUMN source TEXT DEFAULT ''")
         conn.commit()
         conn.close()
 
@@ -198,8 +203,8 @@ class Database:
             """INSERT OR IGNORE INTO reviews
                (review_id, place_id, reviewer_name, reviewer_profile_url, reviewer_avatar_url,
                 reviewer_user_id, reviewer_review_count, reviewer_is_local_guide,
-                rating, text, date, language, photos, owner_reply, owner_reply_date)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                rating, text, date, language, photos, owner_reply, owner_reply_date, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 review.review_id, place_id,
                 review.reviewer.name, review.reviewer.profile_url, review.reviewer.avatar_url,
@@ -208,6 +213,7 @@ class Database:
                 review.rating, review.text, review.date, review.language,
                 _to_json(review.photos),
                 review.owner_reply, review.owner_reply_date,
+                review.source,
             ),
         )
         self._conn().commit()
