@@ -525,7 +525,7 @@ def _reviews_from_data(data):
 
     reviews = []
     for entry in entries:
-        if not isinstance(entry, list) or len(entry) < 2:
+        if not isinstance(entry, list) or not entry:
             continue
         review = _parse_single_review(entry)
         if review:
