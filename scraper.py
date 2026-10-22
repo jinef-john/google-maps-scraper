@@ -2,7 +2,6 @@
 
 import hashlib
 import logging
-import random
 import sys
 import threading
 import time
@@ -133,8 +132,8 @@ class GoogleMapsScraper:
         """Fetch one page of reviews. Returns (reviews, next_cursor).
 
         Retries with a re-harvested ei token when the page comes back empty but
-        the place should have reviews, and with a brand-new session when Google
-        serves its signed-out "limited view" (a few reviews, no cursor).
+        the place should have reviews. A signed-out "limited view" is an auth
+        gate, not a transient failure, so it is not retried.
         """
         best = ([], None)
         for attempt in range(_REVIEW_PAGE_ATTEMPTS):
@@ -158,21 +157,24 @@ class GoogleMapsScraper:
 
             reviews, next_cursor, limited = parse_reviews_page(resp.text)
             if limited:
-                # Limited view ignores the cursor, so only its first page is usable
+                # Limited view ignores the cursor, so only its first page is usable.
                 if not cursor and len(reviews) > len(best[0]):
                     best = (reviews, None)
-                logger.info("Limited review view for %s — starting a fresh session (attempt %d/%d)",
-                            place_id, attempt + 1, _REVIEW_PAGE_ATTEMPTS)
-                client.reset()
-                # Limited view shows up more under bursts; back off before the next session
-                time.sleep(min(2 * (attempt + 1), 8) + random.random())
-                continue
+                # Retrying is pointless: the signed-out limited view is an auth
+                # gate, not a transient failure. Google returns zero reviews and
+                # a fresh session does not help. Fail fast instead of burning
+                # ~100s per place on session resets and backoff.
+                if best[0]:
+                    logger.warning("Google served the limited review view for %s; "
+                                   "saving the %d available review(s)", place_id, len(best[0]))
+                else:
+                    logger.warning("Google requires a signed-in session for reviews "
+                                   "(%s); skipping review retries", place_id)
+                break
             if reviews or not expect_reviews:
                 return reviews, next_cursor
             logger.warning("Reviews empty for %s — refreshing review session...", place_id)
 
-        if best[0]:
-            logger.warning("Google kept serving limited reviews for %s; saving %d", place_id, len(best[0]))
         return best
 
     def iter_reviews(self, place_id, max_reviews=None, cursor="", lat=0.0, lng=0.0, query=""):
